@@ -1,0 +1,15 @@
+# secrets — .env.example TETAP dilacak git (negasi di bawah), .env* lain tidak
+.env*
+!.env.example
+
+# state runtime — dibuat install.sh/deploy.sh, bukan bagian repo
+certbot/conf/*
+certbot/www/*
+!certbot/conf/.gitkeep
+!certbot/www/.gitkeep
+nginx/conf.d/default.conf
+mapproxy/mapproxy.yaml
+mapproxy/layers-manifest.json
+
+.DS_Store
+*.log

@@ -1,0 +1,6 @@
+# Target deploy repo ini SELALU Linux (server produksi/dev) — paksa LF untuk
+# semua file teks, apa pun setting core.autocrlf di mesin yang commit (mis.
+# Windows). Tanpa ini, shell script (install.sh/deploy.sh) bisa ke-commit
+# dengan CRLF dan gagal "bad interpreter" saat dijalankan di server.
+* text=auto eol=lf
+*.sh text eol=lf

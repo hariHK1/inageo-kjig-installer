@@ -1,0 +1,117 @@
+# Template — deploy.sh menyalin file ini menjadi default.conf (gitignored) dan
+# mengganti __DOMAIN__ sekali via sed saat pertama kali dijalankan. Setelah itu
+# default.conf bebas diedit manual dan tidak akan ditimpa lagi oleh deploy.sh.
+
+# Resolver DNS embedded Docker. WAJIB dipakai bersama proxy_pass bervariabel
+# (lihat `set $app_up ...` di bawah): blok `upstream {}` klasik hanya resolve
+# nama SEKALI saat nginx start, jadi begitu container app di-recreate/scale,
+# nginx tetap menembak IP lama sampai di-restart manual. Dengan resolver +
+# variabel, nginx resolve ulang tiap `valid=10s` — scaling APP_REPLICAS
+# terlihat otomatis dalam ≤10 detik tanpa reload.
+resolver 127.0.0.11 valid=10s ipv6=off;
+resolver_timeout 3s;
+
+# Sembunyikan versi nginx dari header Server: dan halaman error bawaan —
+# directive ini di-inherit ke semua server{}/location{} di bawah (beda dari
+# add_header yang all-or-nothing per-location, lihat snippets/proxy-common.conf).
+server_tokens off;
+
+proxy_cache_path /var/cache/nginx/static levels=1:2 keys_zone=static_cache:10m
+                 max_size=1g inactive=7d use_temp_path=off;
+
+limit_req_zone $binary_remote_addr zone=apis:10m rate=40r/s;
+# Batas koneksi konkuren per-IP — mitigasi dasar terhadap satu klien membuka
+# terlalu banyak koneksi sekaligus (pelengkap limit_req yang membatasi laju).
+limit_conn_zone $binary_remote_addr zone=perip:10m;
+
+map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+
+# ── :80 — ACME challenge + redirect ke HTTPS ────────────────────────────────
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __DOMAIN__;
+
+    # Harus di atas redirect (^~ mengalahkan prefix match lain, termasuk location /).
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type "text/plain";
+        access_log off;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# ── :443 — aplikasi ──────────────────────────────────────────────────────────
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name __DOMAIN__;
+
+    # Saat bootstrap TLS pertama kali, path ini berisi dummy self-signed cert
+    # (dibuat deploy.sh supaya nginx bisa start sebelum certbot pernah jalan).
+    # Setelah bootstrap_tls() sukses, file yang sama berisi cert Let's Encrypt asli.
+    ssl_certificate     /etc/letsencrypt/live/__DOMAIN__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__DOMAIN__/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    # OCSP stapling — server yang mengirim status revocation sertifikat
+    # sendiri ke klien, klien tidak perlu query terpisah ke CA. chain.pem
+    # dibuat deploy.sh (dummy saat bootstrap, diganti asli oleh certbot) —
+    # sama seperti fullchain.pem/privkey.pem, supaya nginx tidak gagal start
+    # sebelum sertifikat asli pernah diterbitkan.
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    ssl_trusted_certificate /etc/letsencrypt/live/__DOMAIN__/chain.pem;
+
+    # Security header (HSTS, X-Frame-Options, dst.) ditaruh di
+    # snippets/proxy-common.conf, BUKAN di sini — nginx tidak mewarisi
+    # add_header ke location yang punya add_header sendiri (lihat komentar
+    # di file snippet), jadi harus didefinisikan di tempat yang di-include
+    # semua location, bukan di level server block ini.
+    #
+    # CSP sengaja TIDAK ditambahkan — butuh audit manual terhadap seluruh
+    # script/style/worker source yang dipakai app ini (Cesium worker, dsb.)
+    # sebelum aman diaktifkan; menambah CSP tanpa audit berisiko mematahkan
+    # aplikasi.
+
+    # Pelengkap limit_req (laju) — batasi jumlah koneksi konkuren per-IP.
+    limit_conn perip 40;
+
+    client_max_body_size 32m;
+    gzip on;
+    gzip_min_length 1024;
+    gzip_types application/javascript application/json text/css image/svg+xml application/xml;
+
+    # Variabel (bukan host literal) — memaksa nginx resolve ulang lewat
+    # `resolver` di atas, bukan cache sekali di startup.
+    set $app_up http://app:3000;
+
+    location /_next/static/ {
+        proxy_pass $app_up$request_uri;
+        include /etc/nginx/snippets/proxy-common.conf;
+        proxy_cache static_cache;
+        proxy_cache_valid 200 30d;
+        proxy_cache_lock on;
+        add_header X-Nginx-Cache $upstream_cache_status always;
+    }
+
+    location /apis/ {
+        limit_req zone=apis burst=80 nodelay;
+        proxy_pass $app_up$request_uri;
+        # proxy_read_timeout SUDAH ada di proxy-common.conf (60s) — jangan
+        # ditulis ulang di sini, nginx menolak start kalau directive dobel.
+        include /etc/nginx/snippets/proxy-common.conf;
+    }
+
+    location / {
+        proxy_pass $app_up$request_uri;
+        include /etc/nginx/snippets/proxy-common.conf;
+    }
+}

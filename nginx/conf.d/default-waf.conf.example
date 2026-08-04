@@ -1,0 +1,81 @@
+# Template mode "di belakang WAF" — dipakai kalau BEHIND_WAF=true di .env.
+# Beda dari default.conf.example: TIDAK ada blok :443/ssl_certificate/certbot
+# sama sekali — asumsinya WAF/reverse-proxy di depan yang pegang TLS publik
+# dan meneruskan ke server ini lewat HTTP biasa (pola umum CDN/WAF-di-depan).
+#
+# deploy.sh menyalin file ini menjadi default.conf (gitignored) saat
+# BEHIND_WAF=true, ganti __DOMAIN__ dan menyisipkan baris set_real_ip_from
+# di baris penanda REAL-IP TRUST di bawah (kalau WAF_TRUSTED_CIDR diisi).
+# Catatan: penanda itu SENGAJA tidak ditulis literal di komentar ini —
+# sed mencocokkan berdasarkan teks persis, kalau ditulis dua kali (di sini
+# dan di baris penanda aslinya) keduanya akan tertangkap dan baris ter-inject
+# dua kali di tempat yang salah.
+#
+# Header keamanan (X-Content-Type-Options dst.) ditaruh di
+# snippets/proxy-common-waf.conf, BUKAN di sini — nginx tidak mewarisi
+# add_header ke location yang punya add_header sendiri (/_next/static/ set
+# X-Nginx-Cache), jadi harus didefinisikan di tempat yang di-include semua
+# location.
+
+resolver 127.0.0.11 valid=10s ipv6=off;
+resolver_timeout 3s;
+
+# Sembunyikan versi nginx dari header Server: dan halaman error bawaan —
+# directive ini di-inherit ke semua server{}/location{} di bawah (beda dari
+# add_header yang all-or-nothing per-location, lihat snippets/proxy-common-waf.conf).
+server_tokens off;
+
+proxy_cache_path /var/cache/nginx/static levels=1:2 keys_zone=static_cache:10m
+                 max_size=1g inactive=7d use_temp_path=off;
+
+limit_req_zone $binary_remote_addr zone=apis:10m rate=40r/s;
+limit_conn_zone $binary_remote_addr zone=perip:10m;
+
+map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __DOMAIN__;
+
+    # __REAL_IP_TRUST__
+    # Baris `set_real_ip_from <CIDR WAF>;` disisipkan di sini oleh deploy.sh
+    # kalau WAF_TRUSTED_CIDR diisi saat instalasi. Tanpa itu (dikosongkan):
+    # $remote_addr tetap IP WAF, bukan klien asli — limit_req/limit_conn di
+    # bawah jadi kurang presisi (semua traffic lewat WAF kelihatan satu
+    # sumber), TAPI tetap aman dari spoofing header karena nginx tidak
+    # mempercayai X-Forwarded-For dari sumber yang tidak dipercaya eksplisit.
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+
+    limit_conn perip 40;
+
+    client_max_body_size 32m;
+    gzip on;
+    gzip_min_length 1024;
+    gzip_types application/javascript application/json text/css image/svg+xml application/xml;
+
+    set $app_up http://app:3000;
+
+    location /_next/static/ {
+        proxy_pass $app_up$request_uri;
+        include /etc/nginx/snippets/proxy-common-waf.conf;
+        proxy_cache static_cache;
+        proxy_cache_valid 200 30d;
+        proxy_cache_lock on;
+        add_header X-Nginx-Cache $upstream_cache_status always;
+    }
+
+    location /apis/ {
+        limit_req zone=apis burst=80 nodelay;
+        proxy_pass $app_up$request_uri;
+        # proxy_read_timeout SUDAH ada di proxy-common-waf.conf (60s) — jangan
+        # ditulis ulang di sini, nginx menolak start kalau directive dobel.
+        include /etc/nginx/snippets/proxy-common-waf.conf;
+    }
+
+    location / {
+        proxy_pass $app_up$request_uri;
+        include /etc/nginx/snippets/proxy-common-waf.conf;
+    }
+}

@@ -1,0 +1,43 @@
+# Overlay OPSIONAL — HANYA berisi `ports:` tambahan untuk akses langsung ke
+# service yang biasanya internal-only (postgres/redis/redis-queue/harvester/
+# mapproxy/app bypass nginx). TIDAK aktif secara default — docker-compose.yml
+# sendirian sudah lengkap dan aman (semua service itu tetap internal-only).
+#
+# Diaktifkan HANYA kalau install.sh menulis baris ini ke .env:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.ports.yml
+# (var bawaan yang otomatis dibaca `docker compose`, tidak perlu -f manual.)
+#
+# Kenapa file terpisah, bukan `${VAR:-}` kosong langsung di docker-compose.yml
+# utama: `ports: ["${POSTGRES_HOST_PORT}:5432"]` dengan var KOSONG menghasilkan
+# ":5432" — syntax tidak valid / perilaku tidak konsisten antar versi Docker
+# Compose. Memisah ke overlay opt-in inilah yang benar-benar membuat "kosong
+# di .env = tidak ter-expose sama sekali", bukan sekadar port kosong.
+services:
+  postgres:
+    ports:
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
+
+  redis:
+    ports:
+      - "${REDIS_HOST_PORT:-6379}:6379"
+
+  redis-queue:
+    ports:
+      - "${REDIS_QUEUE_HOST_PORT:-6380}:6379"
+
+  harvester:
+    ports:
+      - "${HARVESTER_HOST_PORT:-4000}:4000"
+
+  mapproxy:
+    ports:
+      - "${MAPPROXY_HOST_PORT:-8081}:80"
+
+  # Bypass nginx — akses app langsung tanpa TLS/reverse-proxy. HANYA jalan
+  # kalau APP_REPLICAS=1 — >1 replica tidak bisa berbagi satu port host yang
+  # sama (docker compose akan gagal start). Debug langsung dan multi-replica
+  # itu dua kebutuhan yang berbeda; kalau butuh keduanya, turunkan
+  # APP_REPLICAS jadi 1 dulu selama sesi debug.
+  app:
+    ports:
+      - "${APP_DIRECT_PORT:-3000}:3000"
