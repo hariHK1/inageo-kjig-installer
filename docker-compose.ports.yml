@@ -1,7 +1,9 @@
 # Overlay OPSIONAL — HANYA berisi `ports:` tambahan untuk akses langsung ke
-# service yang biasanya internal-only (postgres/redis/redis-queue/harvester/
-# mapproxy/app bypass nginx). TIDAK aktif secara default — docker-compose.yml
+# service infra yang biasanya internal-only (postgres/redis/redis-queue/
+# harvester/mapproxy). TIDAK aktif secara default — docker-compose.yml
 # sendirian sudah lengkap dan aman (semua service itu tetap internal-only).
+# Port `app` (bypass nginx) SENGAJA di overlay terpisah, lihat
+# docker-compose.app-port.yml.
 #
 # Diaktifkan HANYA kalau install.sh menulis baris ini ke .env:
 #   COMPOSE_FILE=docker-compose.yml:docker-compose.ports.yml
@@ -33,11 +35,10 @@ services:
     ports:
       - "${MAPPROXY_HOST_PORT:-8081}:80"
 
-  # Bypass nginx — akses app langsung tanpa TLS/reverse-proxy. HANYA jalan
-  # kalau APP_REPLICAS=1 — >1 replica tidak bisa berbagi satu port host yang
-  # sama (docker compose akan gagal start). Debug langsung dan multi-replica
-  # itu dua kebutuhan yang berbeda; kalau butuh keduanya, turunkan
-  # APP_REPLICAS jadi 1 dulu selama sesi debug.
-  app:
-    ports:
-      - "${APP_DIRECT_PORT:-3000}:3000"
+  # Port app SENGAJA TIDAK di sini (lihat docker-compose.app-port.yml) — file
+  # ini pakai fallback "${VAR:-default}" di semua service, artinya walau
+  # APP_DIRECT_PORT dikosongkan (mis. karena APP_REPLICAS>1, install.sh
+  # sengaja mengosongkannya), port app AKAN TETAP ter-publish ke default 3000
+  # selama overlay ini aktif — itu persis bug yang pernah bikin 2 replica app
+  # rebutan 1 port host & bikin nginx gagal start. Overlay app-port.yml
+  # terpisah supaya cuma aktif kalau APP_DIRECT_PORT betul-betul diisi.

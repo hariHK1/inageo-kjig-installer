@@ -1,0 +1,19 @@
+# Overlay OPSIONAL TERPISAH dari docker-compose.ports.yml — HANYA untuk akses
+# langsung ke container `app` (bypass nginx/TLS). Dipisah ke file sendiri
+# supaya bisa mati independen dari port-port infra lain: kalau digabung ke
+# docker-compose.ports.yml dengan fallback "${APP_DIRECT_PORT:-3000}", port
+# itu akan tetap ter-publish ke default 3000 walau APP_DIRECT_PORT dikosongkan
+# (mis. karena APP_REPLICAS>1 — install.sh sengaja mengosongkannya di kasus
+# itu). Dua replica app tidak bisa berbagi satu port host yang sama, jadi
+# kejadian itu bikin salah satu replica gagal start dan nginx (yang
+# depends_on app) ikut tidak pernah start.
+#
+# File ini HANYA dimasukkan ke COMPOSE_FILE oleh install.sh saat
+# APP_DIRECT_PORT betul-betul diisi (otomatis berarti APP_REPLICAS=1 — lihat
+# guard di install.sh). Kalau kamu edit APP_REPLICAS/APP_DIRECT_PORT manual di
+# .env setelahnya, pastikan juga tidak menyalakan APP_DIRECT_PORT bersamaan
+# dengan APP_REPLICAS>1.
+services:
+  app:
+    ports:
+      - "${APP_DIRECT_PORT}:3000"

@@ -333,6 +333,13 @@ run_wizard() {
             log_warn "APP_REPLICAS=$APP_REPLICAS (>1) — akses langsung ke app (bypass nginx) TIDAK bisa dipakai bersamaan dengan multi-replica. Dikosongkan."
         else
             APP_DIRECT_PORT=$(ask "Port host untuk akses app langsung (bypass nginx, kosongkan kalau tidak perlu)" "")
+            # docker-compose.app-port.yml TERPISAH dari docker-compose.ports.yml
+            # (lihat komentar di file itu) — cuma dimasukkan ke COMPOSE_FILE
+            # kalau APP_DIRECT_PORT betul-betul diisi, supaya tidak ada
+            # fallback default port yang diam-diam tetap ter-publish saat kosong.
+            if [[ -n "$APP_DIRECT_PORT" ]]; then
+                COMPOSE_FILE_VAL="$COMPOSE_FILE_VAL:docker-compose.app-port.yml"
+            fi
         fi
     fi
 
