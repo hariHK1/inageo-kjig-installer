@@ -4,7 +4,7 @@
 # sana). Repo installer ini SENGAJA tidak menyimpan source code aplikasi.
 services:
   app:
-    image: ghcr.io/${GHCR_OWNER}/inageo-mapviewer-app:${RELEASE_VERSION}
+    image: ghcr.io/${GHCR_OWNER}/${GHCR_REPO}-app:${RELEASE_VERSION}
     restart: unless-stopped
     environment:
       API_ACCESS_TOKEN: ${API_ACCESS_TOKEN}
@@ -125,7 +125,7 @@ services:
       - cache
 
   harvester:
-    image: ghcr.io/${GHCR_OWNER}/inageo-mapviewer-harvester:${RELEASE_VERSION}
+    image: ghcr.io/${GHCR_OWNER}/${GHCR_REPO}-harvester:${RELEASE_VERSION}
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-harvester}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-harvester}
@@ -142,7 +142,7 @@ services:
   # dibake ke image harvester (bukan lagi bind-mount dari host — repo ini
   # tidak punya file itu). `docker compose run --rm harvester-seed`.
   harvester-seed:
-    image: ghcr.io/${GHCR_OWNER}/inageo-mapviewer-harvester:${RELEASE_VERSION}
+    image: ghcr.io/${GHCR_OWNER}/${GHCR_REPO}-harvester:${RELEASE_VERSION}
     profiles: ["tools"]
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-harvester}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-harvester}

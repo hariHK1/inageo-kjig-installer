@@ -68,13 +68,24 @@ check_env() {
     load_env_file "$ENV_FILE"
 
     local missing=0
-    # GHCR_* SENGAJA cuma warning di sini, bukan blocker — server tanpa akses
+    # GHCR_OWNER/GHCR_REPO WAJIB di kedua mode (pull ATAU bundle) — dua-duanya
+    # dipakai membentuk string image di docker-compose.yml
+    # (ghcr.io/$GHCR_OWNER/$GHCR_REPO-app:$RELEASE_VERSION). Di mode bundle,
+    # `docker load` memuat image dengan tag PERSIS seperti yang dipakai CI
+    # (dari nama repo GitHub yang sebenarnya) — kalau dua var ini di .env
+    # tidak sama persis dengan itu, compose tidak akan menemukan image yang
+    # sudah dimuat sama sekali, walau tidak butuh pull.
+    if [[ -z "${GHCR_OWNER:-}" || -z "${GHCR_REPO:-}" ]]; then
+        log_error "GHCR_OWNER/GHCR_REPO kosong di .env — wajib diisi (harus sama persis dengan owner/nama repo GitHub source), dipakai membentuk nama image walau di mode bundle sekalipun."
+        missing=1
+    fi
+    # GHCR_USERNAME/GHCR_TOKEN SENGAJA cuma warning — server tanpa akses
     # internet ke ghcr.io sama sekali (jaringan internal tertutup) bisa
     # deploy murni dari bundle tar.gz Release (menu "Load image dari bundle"),
-    # tidak pernah butuh kredensial GHCR. Validasi keras dipindah ke
+    # tidak pernah butuh kredensial ini. Validasi keras dipindah ke
     # action_pull sendiri, satu-satunya tempat yang benar-benar butuh ini.
-    if [[ -z "${GHCR_OWNER:-}" || -z "${GHCR_USERNAME:-}" || -z "${GHCR_TOKEN:-}" ]]; then
-        log_warn "GHCR_OWNER/GHCR_USERNAME/GHCR_TOKEN kosong di .env — 'Pull image' (menu 1/2) tidak akan bisa dipakai. Kalau deploy murni dari bundle tar.gz Release, ini boleh dikosongkan."
+    if [[ -z "${GHCR_USERNAME:-}" || -z "${GHCR_TOKEN:-}" ]]; then
+        log_warn "GHCR_USERNAME/GHCR_TOKEN kosong di .env — 'Pull image' (menu 1/2) tidak akan bisa dipakai. Kalau deploy murni dari bundle tar.gz Release, ini boleh dikosongkan."
     fi
     if [[ -z "${RELEASE_VERSION:-}" ]]; then
         log_error "RELEASE_VERSION kosong di .env — wajib diisi (mis. v0.1.0, atau 'latest')."
@@ -238,8 +249,8 @@ bootstrap_tls() {
 
 # ── Aksi ──────────────────────────────────────────────────────────────────
 action_pull() {
-    if [[ -z "${GHCR_OWNER:-}" || -z "${GHCR_USERNAME:-}" || -z "${GHCR_TOKEN:-}" ]]; then
-        log_error "GHCR_OWNER/GHCR_USERNAME/GHCR_TOKEN kosong di .env — tidak bisa pull. Kalau server ini tidak punya akses ke ghcr.io, pakai menu \"Load image dari bundle\" (tar.gz dari GitHub Release) sebagai gantinya."
+    if [[ -z "${GHCR_OWNER:-}" || -z "${GHCR_REPO:-}" || -z "${GHCR_USERNAME:-}" || -z "${GHCR_TOKEN:-}" ]]; then
+        log_error "GHCR_OWNER/GHCR_REPO/GHCR_USERNAME/GHCR_TOKEN kosong di .env — tidak bisa pull. Kalau server ini tidak punya akses ke ghcr.io, pakai menu \"Load image dari bundle\" (tar.gz dari GitHub Release) sebagai gantinya."
         return 1
     fi
     log_info "Login ke ghcr.io sebagai $GHCR_USERNAME..."
@@ -277,7 +288,7 @@ action_load_bundle() {
 }
 
 action_deploy() {
-    if [[ -n "${GHCR_OWNER:-}" && -n "${GHCR_USERNAME:-}" && -n "${GHCR_TOKEN:-}" ]]; then
+    if [[ -n "${GHCR_USERNAME:-}" && -n "${GHCR_TOKEN:-}" ]]; then
         action_pull || return 1
     else
         log_warn "GHCR_* kosong — melewati pull, asumsi image sudah dimuat lewat \"Load image dari bundle\". Kalau belum, batalkan dan jalankan menu itu dulu."
@@ -312,7 +323,7 @@ action_set_version() {
     fi
     export RELEASE_VERSION="$new_version"
     log_info "Pindah ke versi $new_version..."
-    if [[ -n "${GHCR_OWNER:-}" && -n "${GHCR_USERNAME:-}" && -n "${GHCR_TOKEN:-}" ]]; then
+    if [[ -n "${GHCR_USERNAME:-}" && -n "${GHCR_TOKEN:-}" ]]; then
         action_pull || return 1
     else
         log_warn "GHCR_* kosong — pastikan sudah 'Load image dari bundle' untuk tag $new_version SEBELUM lanjut, kalau belum batalkan dulu."

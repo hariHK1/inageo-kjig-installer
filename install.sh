@@ -215,23 +215,29 @@ install_custom_cert() {
 run_wizard() {
     echo ""
     log_info "=== Registry (GHCR) ==="
-    echo "Image app & harvester dibangun & di-tag GitHub Actions di repo source"
-    echo "(inageo-mapviewer) — installer ini cuma pull, tidak build apa pun."
-    local GHCR_OWNER="" GHCR_USERNAME="" GHCR_TOKEN="" RELEASE_VERSION
+    echo "Image app & harvester dibangun & di-tag GitHub Actions di repo source,"
+    echo "installer ini cuma pull/load, tidak build apa pun."
+    local GHCR_OWNER GHCR_REPO GHCR_USERNAME="" GHCR_TOKEN="" RELEASE_VERSION
     RELEASE_VERSION=$(ask_required "RELEASE_VERSION (tag rilis, mis. v0.1.0 — atau 'latest', tidak reproducible)")
+    echo ""
+    echo "Owner & nama repo GitHub source (HARUS SAMA PERSIS — kalau salah, docker"
+    echo "compose tidak akan pernah menemukan image yang benar, baik lewat pull"
+    echo "maupun setelah load bundle). Cek dengan 'git remote -v' di repo source"
+    echo "kalau tidak yakin nama repo persisnya."
+    GHCR_OWNER=$(ask_required "GHCR_OWNER (owner GitHub, mis. hariHK1)")
+    GHCR_REPO=$(ask_required "GHCR_REPO (nama repo GitHub source, mis. inageo-kjig)")
     echo ""
     echo "Server ini nanti ambil image dengan cara: docker pull langsung dari"
     echo "ghcr.io (butuh akses internet dari server ke ghcr.io), ATAU load dari"
     echo "bundle tar.gz Release yang kamu download manual & transfer sendiri"
     echo "(cocok untuk server di jaringan internal tanpa akses ghcr.io)."
     if confirm "Server ini punya akses internet ke ghcr.io (mode pull langsung)?"; then
-        GHCR_OWNER=$(ask_required "GHCR_OWNER (owner GitHub tempat image di-publish, mis. hariHK1)")
         GHCR_USERNAME=$(ask_required "GHCR_USERNAME (username GitHub kamu, untuk docker login)")
         echo "Buat Personal Access Token BARU khusus ini (scope read:packages saja) —"
         echo "JANGAN reuse token yang pernah ditempel di chat/tempat lain, anggap itu sudah bocor."
         GHCR_TOKEN=$(ask_required "GHCR_TOKEN (PAT scope read:packages)")
     else
-        log_info "GHCR_OWNER/USERNAME/TOKEN dikosongkan — pakai menu \"Load image dari bundle\" di deploy.sh setelah setup ini selesai. Download tar.gz dari halaman Release repo source, transfer ke server ini, baru load."
+        log_info "GHCR_USERNAME/TOKEN dikosongkan — pakai menu \"Load image dari bundle\" di deploy.sh setelah setup ini selesai. Download tar.gz dari halaman Release repo source, transfer ke server ini, baru load."
     fi
 
     echo ""
@@ -372,7 +378,7 @@ run_wizard() {
 
     echo ""
     log_info "=== Ringkasan ==="
-    echo "GHCR                  : $GHCR_OWNER (versi: $RELEASE_VERSION)"
+    echo "GHCR                  : $GHCR_OWNER/$GHCR_REPO (versi: $RELEASE_VERSION)"
     echo "Domain/origin         : $DOMAIN ($NEXT_PUBLIC_APP_ORIGIN)"
     if [[ "$BEHIND_WAF" == "true" ]]; then
         echo "TLS                   : ditangani WAF / tanpa TLS (BEHIND_WAF=true)"
@@ -411,6 +417,7 @@ run_wizard() {
 
 # === Registry (GHCR) ===
 GHCR_OWNER=$GHCR_OWNER
+GHCR_REPO=$GHCR_REPO
 GHCR_USERNAME=$GHCR_USERNAME
 GHCR_TOKEN=$GHCR_TOKEN
 RELEASE_VERSION=$RELEASE_VERSION
