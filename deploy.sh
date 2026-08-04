@@ -68,9 +68,13 @@ check_env() {
     load_env_file "$ENV_FILE"
 
     local missing=0
+    # GHCR_* SENGAJA cuma warning di sini, bukan blocker — server tanpa akses
+    # internet ke ghcr.io sama sekali (jaringan internal tertutup) bisa
+    # deploy murni dari bundle tar.gz Release (menu "Load image dari bundle"),
+    # tidak pernah butuh kredensial GHCR. Validasi keras dipindah ke
+    # action_pull sendiri, satu-satunya tempat yang benar-benar butuh ini.
     if [[ -z "${GHCR_OWNER:-}" || -z "${GHCR_USERNAME:-}" || -z "${GHCR_TOKEN:-}" ]]; then
-        log_error "GHCR_OWNER/GHCR_USERNAME/GHCR_TOKEN kosong di .env — wajib diisi untuk pull image private."
-        missing=1
+        log_warn "GHCR_OWNER/GHCR_USERNAME/GHCR_TOKEN kosong di .env — 'Pull image' (menu 1/2) tidak akan bisa dipakai. Kalau deploy murni dari bundle tar.gz Release, ini boleh dikosongkan."
     fi
     if [[ -z "${RELEASE_VERSION:-}" ]]; then
         log_error "RELEASE_VERSION kosong di .env — wajib diisi (mis. v0.1.0, atau 'latest')."
@@ -234,6 +238,10 @@ bootstrap_tls() {
 
 # ── Aksi ──────────────────────────────────────────────────────────────────
 action_pull() {
+    if [[ -z "${GHCR_OWNER:-}" || -z "${GHCR_USERNAME:-}" || -z "${GHCR_TOKEN:-}" ]]; then
+        log_error "GHCR_OWNER/GHCR_USERNAME/GHCR_TOKEN kosong di .env — tidak bisa pull. Kalau server ini tidak punya akses ke ghcr.io, pakai menu \"Load image dari bundle\" (tar.gz dari GitHub Release) sebagai gantinya."
+        return 1
+    fi
     log_info "Login ke ghcr.io sebagai $GHCR_USERNAME..."
     echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin \
         || { log_error "Docker login gagal — cek GHCR_USERNAME/GHCR_TOKEN di .env."; return 1; }
@@ -243,8 +251,38 @@ action_pull() {
     log_ok "Image ter-pull."
 }
 
+# Alternatif action_pull — untuk server TANPA akses ke ghcr.io sama sekali
+# (mis. jaringan internal tertutup). Bundle (.tar.gz, berisi image app +
+# harvester sekaligus) diambil dari asset GitHub Release (dibuat otomatis
+# oleh .github/workflows/release.yml di repo source), didownload manual di
+# mesin yang punya internet, ditransfer ke server ini (scp/rsync/USB/dsb).
+# Setelah dimuat, `docker compose up -d` TIDAK akan mencoba pull ulang
+# selama tag RELEASE_VERSION di .env sudah cocok dengan yang ada di image
+# lokal — jadi urutan yang benar: load bundle DULU, baru isi/cocokkan
+# RELEASE_VERSION di .env, baru "Deploy".
+action_load_bundle() {
+    read -rp "Path file bundle image (.tar.gz, hasil download dari GitHub Release): " bundle_path
+    if [[ ! -f "$bundle_path" ]]; then
+        log_error "File '$bundle_path' tidak ditemukan."
+        return 1
+    fi
+    log_info "Memuat image dari $bundle_path (bisa beberapa menit tergantung ukuran)..."
+    if [[ "$bundle_path" == *.gz ]]; then
+        gunzip -c "$bundle_path" | docker load || { log_error "Gagal load image."; return 1; }
+    else
+        docker load -i "$bundle_path" || { log_error "Gagal load image."; return 1; }
+    fi
+    log_ok "Image dimuat. Pastikan RELEASE_VERSION di .env SAMA dengan tag bundle ini (lihat nama file/tag Release-nya), baru lanjut menu \"Deploy\" — image tidak akan di-pull ulang selama tag itu sudah ada lokal."
+    docker images --filter "reference=ghcr.io/*"
+}
+
 action_deploy() {
-    action_pull || return 1
+    if [[ -n "${GHCR_OWNER:-}" && -n "${GHCR_USERNAME:-}" && -n "${GHCR_TOKEN:-}" ]]; then
+        action_pull || return 1
+    else
+        log_warn "GHCR_* kosong — melewati pull, asumsi image sudah dimuat lewat \"Load image dari bundle\". Kalau belum, batalkan dan jalankan menu itu dulu."
+        confirm "Lanjut deploy dengan image yang sudah ada secara lokal?" || return 1
+    fi
     ensure_nginx_conf
     if [[ "${BEHIND_WAF:-false}" == "true" ]]; then
         log_info "BEHIND_WAF=true — melewati bootstrap TLS/certbot."
@@ -274,7 +312,12 @@ action_set_version() {
     fi
     export RELEASE_VERSION="$new_version"
     log_info "Pindah ke versi $new_version..."
-    action_pull || return 1
+    if [[ -n "${GHCR_OWNER:-}" && -n "${GHCR_USERNAME:-}" && -n "${GHCR_TOKEN:-}" ]]; then
+        action_pull || return 1
+    else
+        log_warn "GHCR_* kosong — pastikan sudah 'Load image dari bundle' untuk tag $new_version SEBELUM lanjut, kalau belum batalkan dulu."
+        confirm "Image untuk versi $new_version sudah dimuat lokal, lanjutkan?" || return 1
+    fi
     $COMPOSE_CMD up -d --no-deps --force-recreate app harvester
     $COMPOSE_CMD ps
     log_ok "Selesai — app & harvester sekarang di versi $new_version."
@@ -372,15 +415,15 @@ action_reload_nginx() {
 print_banner() {
     echo ""
     echo "==================================================="
-    echo "  inageo-mapviewer — Deployment Menu (mode pull GHCR)"
+    echo "  inageo-mapviewer — Deployment Menu (pull GHCR / bundle)"
     echo "==================================================="
 }
 
 main_menu() {
     while true; do
         print_banner
-        echo "1)  Pull image terbaru sesuai RELEASE_VERSION"
-        echo "2)  Deploy (pull + up -d)"
+        echo "1)  Pull image terbaru sesuai RELEASE_VERSION (butuh akses ghcr.io)"
+        echo "2)  Deploy (pull/bundle + up -d)"
         echo "3)  Ganti versi (upgrade / rollback)"
         echo "4)  Stop (down)"
         echo "5)  Restart"
@@ -394,6 +437,7 @@ main_menu() {
         echo "13) Reload nginx"
         echo "14) Migrasi database harvester (node-pg-migrate up)"
         echo "15) Seed awal simpul_jaringan"
+        echo "16) Load image dari bundle (tar.gz Release, tanpa akses ghcr.io)"
         echo "0)  Keluar"
         read -rp "Pilih menu: " choice
         case "$choice" in
@@ -412,6 +456,7 @@ main_menu() {
             13) confirm "Reload nginx sekarang?" && action_reload_nginx ;;
             14) check_env && action_harvester_migrate ;;
             15) check_env && action_harvester_seed ;;
+            16) action_load_bundle ;;
             0) exit 0 ;;
             *) log_warn "Pilihan tidak valid." ;;
         esac

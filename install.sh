@@ -217,13 +217,22 @@ run_wizard() {
     log_info "=== Registry (GHCR) ==="
     echo "Image app & harvester dibangun & di-tag GitHub Actions di repo source"
     echo "(inageo-mapviewer) — installer ini cuma pull, tidak build apa pun."
-    local GHCR_OWNER GHCR_USERNAME GHCR_TOKEN RELEASE_VERSION
-    GHCR_OWNER=$(ask_required "GHCR_OWNER (owner GitHub tempat image di-publish, mis. hariHK1)")
-    GHCR_USERNAME=$(ask_required "GHCR_USERNAME (username GitHub kamu, untuk docker login)")
-    echo "Buat Personal Access Token BARU khusus ini (scope read:packages saja) —"
-    echo "JANGAN reuse token yang pernah ditempel di chat/tempat lain, anggap itu sudah bocor."
-    GHCR_TOKEN=$(ask_required "GHCR_TOKEN (PAT scope read:packages)")
+    local GHCR_OWNER="" GHCR_USERNAME="" GHCR_TOKEN="" RELEASE_VERSION
     RELEASE_VERSION=$(ask_required "RELEASE_VERSION (tag rilis, mis. v0.1.0 — atau 'latest', tidak reproducible)")
+    echo ""
+    echo "Server ini nanti ambil image dengan cara: docker pull langsung dari"
+    echo "ghcr.io (butuh akses internet dari server ke ghcr.io), ATAU load dari"
+    echo "bundle tar.gz Release yang kamu download manual & transfer sendiri"
+    echo "(cocok untuk server di jaringan internal tanpa akses ghcr.io)."
+    if confirm "Server ini punya akses internet ke ghcr.io (mode pull langsung)?"; then
+        GHCR_OWNER=$(ask_required "GHCR_OWNER (owner GitHub tempat image di-publish, mis. hariHK1)")
+        GHCR_USERNAME=$(ask_required "GHCR_USERNAME (username GitHub kamu, untuk docker login)")
+        echo "Buat Personal Access Token BARU khusus ini (scope read:packages saja) —"
+        echo "JANGAN reuse token yang pernah ditempel di chat/tempat lain, anggap itu sudah bocor."
+        GHCR_TOKEN=$(ask_required "GHCR_TOKEN (PAT scope read:packages)")
+    else
+        log_info "GHCR_OWNER/USERNAME/TOKEN dikosongkan — pakai menu \"Load image dari bundle\" di deploy.sh setelah setup ini selesai. Download tar.gz dari halaman Release repo source, transfer ke server ini, baru load."
+    fi
 
     echo ""
     log_info "=== Domain & TLS ==="

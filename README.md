@@ -1,13 +1,18 @@
 # inageo-kjig-installer
 
-Repo operasional untuk deploy [inageo-mapviewer](https://github.com/hariHK1/inageo-mapviewer) via Docker Compose. **Repo ini tidak berisi source code aplikasi sama sekali** — image `app` dan `harvester` dibangun & di-tag versi oleh GitHub Actions di repo source, lalu di-publish ke GHCR (`ghcr.io`). Server produksi cukup clone repo kecil ini dan `docker compose pull`.
+Repo operasional untuk deploy [inageo-mapviewer](https://github.com/hariHK1/inageo-mapviewer) via Docker Compose. **Repo ini tidak berisi source code aplikasi sama sekali** — image `app` dan `harvester` dibangun & di-tag versi oleh GitHub Actions di repo source, lalu di-publish ke GHCR (`ghcr.io`). Server produksi cukup clone repo kecil ini, lalu ambil image dengan salah satu dari **dua cara**:
+
+- **Pull langsung dari GHCR** — server butuh akses internet ke `ghcr.io` + kredensial (`GHCR_USERNAME`/`GHCR_TOKEN` di `.env`).
+- **Load dari bundle tar.gz** — untuk server **tanpa akses internet ke ghcr.io** (mis. jaringan internal tertutup). Setiap rilis, workflow yang sama juga `docker save` kedua image jadi satu `.tar.gz` dan melampirkannya sebagai asset di halaman GitHub Release repo source. Download manual di mesin yang punya internet, transfer ke server ini (scp/rsync/USB), lalu `./deploy.sh` → menu **16) Load image dari bundle**. `GHCR_*` boleh dikosongkan total kalau selalu pakai jalur ini.
 
 ## Alur rilis (dari repo source)
 
 1. Bump versi di `package.json` (repo source), commit.
 2. `git tag vX.Y.Z && git push --tags` — harus **persis** sama dengan versi `package.json` (workflow menolak kalau beda).
-3. GitHub Actions (`.github/workflows/release.yml`) build image `app` & `harvester`, push ke `ghcr.io/<owner>/inageo-mapviewer-app:vX.Y.Z` dan `...-harvester:vX.Y.Z`, buat GitHub Release.
-4. Di server: `deploy.sh` → menu **3) Ganti versi** (atau isi `RELEASE_VERSION` di `.env` lalu **1) Pull**).
+3. GitHub Actions (`.github/workflows/release.yml`) build image `app` & `harvester`, push ke `ghcr.io/<owner>/inageo-mapviewer-app:vX.Y.Z` dan `...-harvester:vX.Y.Z`, bundle keduanya jadi `inageo-mapviewer-vX.Y.Z.tar.gz`, buat GitHub Release dengan tar.gz itu terlampir.
+4. Di server (pilih salah satu):
+   - Ada akses ghcr.io: `deploy.sh` → menu **3) Ganti versi** (atau isi `RELEASE_VERSION` di `.env` lalu **1) Pull**).
+   - Tanpa akses ghcr.io: download `inageo-mapviewer-vX.Y.Z.tar.gz` dari halaman Release, transfer ke server, `deploy.sh` → menu **16) Load image dari bundle**, baru samakan `RELEASE_VERSION` di `.env` dengan tag itu.
 
 ### Sekali sebelum rilis pertama: set GitHub Actions repo Variables
 
@@ -27,7 +32,7 @@ cd inageo-kjig-installer
 ./install.sh
 ```
 
-Wizard akan menanyakan: kredensial GHCR (buat Personal Access Token **baru**, scope `read:packages` saja — jangan reuse token lama), versi rilis, domain/TLS, jumlah replica, port, dan men-generate semua password (Postgres/Redis/Redis-queue/API_ACCESS_TOKEN) otomatis.
+Wizard akan tanya dulu mode ambil image (pull GHCR vs bundle — lihat di atas), lalu: kredensial GHCR (kalau pilih pull; buat Personal Access Token **baru**, scope `read:packages` saja — jangan reuse token lama), versi rilis, domain/TLS, jumlah replica, port, dan men-generate semua password (Postgres/Redis/Redis-queue/API_ACCESS_TOKEN) otomatis.
 
 Untuk server internal/dev tanpa domain publik (mis. IP `192.168.x.x`), jawab "ya" di pertanyaan "di belakang WAF, atau internal/dev tanpa TLS?" — nginx akan jalan HTTP polos tanpa certbot.
 
