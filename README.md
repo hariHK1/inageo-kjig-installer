@@ -14,15 +14,13 @@ Repo operasional untuk deploy [inageo-kjig](https://github.com/hariHK1/inageo-kj
    - Ada akses ghcr.io: `deploy.sh` → menu **3) Ganti versi** (atau isi `RELEASE_VERSION` di `.env` lalu **1) Pull**).
    - Tanpa akses ghcr.io: download `<repo>-vX.Y.Z.tar.gz` dari halaman Release, transfer ke server, `deploy.sh` → menu **16) Load image dari bundle**, baru samakan `RELEASE_VERSION` di `.env` dengan tag itu.
 
-### Sekali sebelum rilis pertama: set GitHub Actions repo Variables
+### Config publik app (origin, sumber data, basemap) — sepenuhnya di `.env`, bukan repo Variables
 
-`NEXT_PUBLIC_*` (origin publik, sumber data harvest, basemap) di-bake ke bundle JS **saat build**, bukan bisa diubah lagi oleh installer ini setelahnya. Di repo source: **Settings → Secrets and variables → Actions → Variables**, isi:
+Beda dari asumsi awal: `APP_ORIGIN`, `DATA_SOURCE`, dan basemap (`RBI_URL` dkk) **tidak** di-bake ke image saat build — image `app` benar-benar environment-agnostic, satu image yang sama dipakai untuk domain/basemap/sumber-data apa pun. Semua nilainya dibaca **runtime** langsung dari `.env` installer ini (`src/lib/runtimeConfig.ts` di repo source, disuntik server-side tiap request). Artinya:
 
-- `NEXT_PUBLIC_APP_ORIGIN` (mis. `https://mapviewer.instansi.go.id`)
-- `NEXT_PUBLIC_DATA_SOURCE` (`backend` untuk pakai harvester, `sample` untuk baca `sample-csw.json` statis)
-- `NEXT_PUBLIC_RBI_URL`, `NEXT_PUBLIC_GRAY_URL(_ATTR)`, `NEXT_PUBLIC_SATELLITE_URL(_ATTR)`, `NEXT_PUBLIC_TOPO_URL(_ATTR)` (opsional, basemap kustom)
-
-Kosong = build tetap jalan, tapi pakai default kosong (basemap publik bawaan RBI/ArcGIS Online). **Kalau butuh beberapa domain dengan origin/basemap berbeda, itu di luar cakupan model "satu image, banyak deployment" ini** — perlu rilis terpisah per environment (repo Variables beda, atau branch/workflow terpisah).
+- **Tidak perlu** set apa pun di GitHub Actions repo Variables untuk ini.
+- Ganti nilai kapan pun di `.env`, cukup `docker compose up -d app` (bukan pull/rilis baru) — perubahan langsung terlihat.
+- Beberapa deployment (dev/staging/prod) dengan origin/basemap berbeda **bisa pakai image yang sama persis**, tinggal `.env` masing-masing beda.
 
 ## Pemasangan pertama kali di server
 
@@ -32,7 +30,7 @@ cd inageo-kjig-installer
 ./install.sh
 ```
 
-Wizard akan tanya dulu mode ambil image (pull GHCR vs bundle — lihat di atas), lalu: kredensial GHCR (kalau pilih pull; buat Personal Access Token **baru**, scope `read:packages` saja — jangan reuse token lama), versi rilis, domain/TLS, jumlah replica, port, dan men-generate semua password (Postgres/Redis/Redis-queue/API_ACCESS_TOKEN) otomatis.
+Wizard akan tanya dulu mode ambil image (pull GHCR vs bundle — lihat di atas), lalu: kredensial GHCR (kalau pilih pull; buat Personal Access Token **baru**, scope `read:packages` saja — jangan reuse token lama), versi rilis, domain/TLS, jumlah replica, port, sumber data harvest & basemap kustom (opsional, runtime), dan men-generate semua password (Postgres/Redis/Redis-queue/API_ACCESS_TOKEN) otomatis.
 
 Untuk server internal/dev tanpa domain publik (mis. IP `192.168.x.x`), jawab "ya" di pertanyaan "di belakang WAF, atau internal/dev tanpa TLS?" — nginx akan jalan HTTP polos tanpa certbot.
 

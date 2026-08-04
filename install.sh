@@ -325,23 +325,40 @@ run_wizard() {
 
     echo ""
     log_info "=== Backend geoportal (server-side only) ==="
-    local API_ACCESS_TOKEN NEXT_PUBLIC_APP_ORIGIN
+    local API_ACCESS_TOKEN APP_ORIGIN
     API_ACCESS_TOKEN="$(gen_password)"
     log_ok "API_ACCESS_TOKEN digenerate otomatis (dipakai bersama app & harvester)."
     if [[ "$BEHIND_WAF" == "true" && "$TLS_MODE" == "" && -z "$WAF_TRUSTED_CIDR" ]]; then
         # Kemungkinan besar internal/dev tanpa TLS sama sekali — tawarkan http://.
         if confirm "Origin publik pakai http:// (bukan https://)? Jawab 'y' kalau server ini benar-benar tanpa TLS (internal/dev)."; then
-            NEXT_PUBLIC_APP_ORIGIN="http://$DOMAIN"
+            APP_ORIGIN="http://$DOMAIN"
         else
-            NEXT_PUBLIC_APP_ORIGIN="https://$DOMAIN"
+            APP_ORIGIN="https://$DOMAIN"
         fi
     else
-        NEXT_PUBLIC_APP_ORIGIN="https://$DOMAIN"
+        APP_ORIGIN="https://$DOMAIN"
     fi
-    echo "NEXT_PUBLIC_APP_ORIGIN runtime di-set ke: $NEXT_PUBLIC_APP_ORIGIN"
-    echo "(Ingat: ini CUMA dipakai cek CORS server-side. Nilai yang di-bake ke bundle"
-    echo "JS klien ditentukan repo Variables saat build di GitHub Actions — pastikan"
-    echo "keduanya sama, lihat README.md.)"
+    echo "APP_ORIGIN di-set ke: $APP_ORIGIN (dipakai cek CORS WMS + dibaca browser — sepenuhnya runtime, bisa diedit lagi kapan pun di .env tanpa rilis baru)."
+
+    echo ""
+    log_info "=== Sumber data & basemap (runtime — bisa diedit lagi kapan pun di .env) ==="
+    local DATA_SOURCE
+    if confirm "Pakai backend harvester (PostGIS terjadwal, direkomendasikan)? 'n' = baca public/sample-csw.json bawaan image"; then
+        DATA_SOURCE="backend"
+    else
+        DATA_SOURCE="sample"
+    fi
+    echo ""
+    echo "Basemap kustom (opsional) — kosongkan SEMUA untuk pakai default publik"
+    echo "(RBI dari BIG, citra dari ArcGIS Online)."
+    local RBI_URL GRAY_URL GRAY_URL_ATTR SATELLITE_URL SATELLITE_URL_ATTR TOPO_URL TOPO_URL_ATTR
+    RBI_URL=$(ask "URL basemap RBI — Rupa Bumi Indonesia, peta garis dasar dari BIG" "")
+    GRAY_URL=$(ask "URL basemap abu-abu (latar netral minim warna)" "")
+    GRAY_URL_ATTR=$(ask "Teks atribusi/sumber basemap abu-abu" "")
+    SATELLITE_URL=$(ask "URL basemap citra satelit" "")
+    SATELLITE_URL_ATTR=$(ask "Teks atribusi/sumber basemap satelit" "")
+    TOPO_URL=$(ask "URL basemap topografi" "")
+    TOPO_URL_ATTR=$(ask "Teks atribusi/sumber basemap topografi" "")
 
     echo ""
     log_info "=== Object storage MinIO (opsional) ==="
@@ -379,7 +396,7 @@ run_wizard() {
     echo ""
     log_info "=== Ringkasan ==="
     echo "GHCR                  : $GHCR_OWNER/$GHCR_REPO (versi: $RELEASE_VERSION)"
-    echo "Domain/origin         : $DOMAIN ($NEXT_PUBLIC_APP_ORIGIN)"
+    echo "Domain/origin         : $DOMAIN ($APP_ORIGIN)"
     if [[ "$BEHIND_WAF" == "true" ]]; then
         echo "TLS                   : ditangani WAF / tanpa TLS (BEHIND_WAF=true)"
     elif [[ "$TLS_MODE" == "custom" ]]; then
@@ -394,6 +411,9 @@ run_wizard() {
     else
         echo "Port debug (exposed)  : (tidak ada, default aman)"
     fi
+    echo "Sumber data harvest   : $DATA_SOURCE"
+    echo "Basemap kustom        : ${RBI_URL:+RBI }${GRAY_URL:+abu-abu }${SATELLITE_URL:+satelit }${TOPO_URL:+topo }"
+    echo "  (kosong semua = pakai default publik RBI BIG/ArcGIS Online)"
     echo "PostGIS               : user=$POSTGRES_USER db=$POSTGRES_DB (password digenerate)"
     echo "MinIO                 : ${MINIO_ENDPOINT:-(tidak dipakai)}"
     echo ""
@@ -411,9 +431,9 @@ run_wizard() {
 # Aman diedit manual kapan pun — installer tidak menimpa file ini kecuali
 # kamu pilih "timpa" saat menjalankan install.sh lagi.
 #
-# CATATAN: NEXT_PUBLIC_* (origin bundle JS, basemap, sumber data) TIDAK ada
-# di sini — sudah di-bake saat build di GitHub Actions (repo source, repo
-# Variables). Lihat README.md.
+# Config publik app (APP_ORIGIN/DATA_SOURCE/basemap) SEPENUHNYA runtime —
+# edit di sini kapan pun, lalu 'docker compose up -d app' cukup (TIDAK perlu
+# pull/rilis baru). Lihat README.md.
 
 # === Registry (GHCR) ===
 GHCR_OWNER=$GHCR_OWNER
@@ -424,7 +444,18 @@ RELEASE_VERSION=$RELEASE_VERSION
 
 # === Konfigurasi backend geoportal (server-side only) ===
 API_ACCESS_TOKEN=$API_ACCESS_TOKEN
-NEXT_PUBLIC_APP_ORIGIN=$NEXT_PUBLIC_APP_ORIGIN
+
+# === Config publik app (runtime, lihat catatan di atas) ===
+APP_ORIGIN=$APP_ORIGIN
+DATA_SOURCE=$DATA_SOURCE
+REACT_APP=production
+RBI_URL=$RBI_URL
+GRAY_URL=$GRAY_URL
+GRAY_URL_ATTR=$GRAY_URL_ATTR
+SATELLITE_URL=$SATELLITE_URL
+SATELLITE_URL_ATTR=$SATELLITE_URL_ATTR
+TOPO_URL=$TOPO_URL
+TOPO_URL_ATTR=$TOPO_URL_ATTR
 
 # === PostGIS + Redis khusus antrian job (backend harvester CSW) ===
 POSTGRES_USER=$POSTGRES_USER

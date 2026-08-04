@@ -13,12 +13,21 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       ALLOWED_BUCKETS: ${ALLOWED_BUCKETS}
-      # Runtime saja (server-side CORS check di check-wms-cors/route.ts) —
-      # bundle JS klien (NEXT_PUBLIC_APP_ORIGIN yang di-bake) TIDAK terpengaruh
-      # nilai ini, itu sudah tetap sejak image di-build. WAJIB disamakan
-      # dengan domain di bawah, kalau tidak dua nilai ini bisa berbeda dan
-      # bikin cek CORS salah — lihat README.md.
-      NEXT_PUBLIC_APP_ORIGIN: ${NEXT_PUBLIC_APP_ORIGIN}
+      # Config publik — dibaca RUNTIME oleh image (src/lib/runtimeConfig.ts di
+      # repo source), BUKAN di-bake saat build lagi. Ganti nilai di .env +
+      # `docker compose up -d app` cukup, tidak perlu tag rilis baru sama
+      # sekali. APP_ORIGIN murni server-side (cek CORS WMS); sisanya juga
+      # dibaca browser lewat <script> yang disuntik layout.tsx.
+      APP_ORIGIN: ${APP_ORIGIN}
+      DATA_SOURCE: ${DATA_SOURCE:-sample}
+      REACT_APP: ${REACT_APP:-production}
+      RBI_URL: ${RBI_URL}
+      GRAY_URL: ${GRAY_URL}
+      GRAY_URL_ATTR: ${GRAY_URL_ATTR}
+      SATELLITE_URL: ${SATELLITE_URL}
+      SATELLITE_URL_ATTR: ${SATELLITE_URL_ATTR}
+      TOPO_URL: ${TOPO_URL}
+      TOPO_URL_ATTR: ${TOPO_URL_ATTR}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       MAPPROXY_SERVICE_URL: http://mapproxy/mapproxy/service
       MAPPROXY_MANIFEST_PATH: /app/mapproxy-config/layers-manifest.json
