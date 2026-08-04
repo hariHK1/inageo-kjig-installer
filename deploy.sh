@@ -35,6 +35,17 @@ load_env_file() {
     local file="$1" key value
     while IFS='=' read -r key value; do
         [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        # Lucuti tanda kutip pembungkus (KEY="val" atau KEY='val') kalau ada —
+        # loader ini SENGAJA bukan shell-parser penuh (supaya aman dari
+        # injection lewat .env), jadi kutip tidak otomatis hilang seperti
+        # `source` biasa. Tanpa ini, nilai seperti RELEASE_VERSION="v0.1.0"
+        # ikut kebawa literal ke docker-compose.yml dan bikin tag image
+        # invalid (mis. ghcr.io/x/y-app:"v0.1.0" — perhatikan kutipnya).
+        if [[ "$value" =~ ^\"(.*)\"$ ]]; then
+            value="${BASH_REMATCH[1]}"
+        elif [[ "$value" =~ ^\'(.*)\'$ ]]; then
+            value="${BASH_REMATCH[1]}"
+        fi
         export "$key=$value"
     done < "$file"
 }
