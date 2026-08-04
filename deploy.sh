@@ -78,15 +78,19 @@ check_env() {
     if [[ -z "${GHCR_OWNER:-}" || -z "${GHCR_REPO:-}" ]]; then
         log_error "GHCR_OWNER/GHCR_REPO kosong di .env — wajib diisi (harus sama persis dengan owner/nama repo GitHub source), dipakai membentuk nama image walau di mode bundle sekalipun."
         missing=1
+    else
+        # Docker/GHCR mewajibkan nama image lowercase — normalisasi di sini
+        # juga (bukan cuma install.sh) supaya .env yang diedit manual/dibuat
+        # sebelum fix ini tetap aman dipakai.
+        GHCR_OWNER="$(echo "$GHCR_OWNER" | tr '[:upper:]' '[:lower:]')"
+        GHCR_REPO="$(echo "$GHCR_REPO" | tr '[:upper:]' '[:lower:]')"
+        export GHCR_OWNER GHCR_REPO
     fi
-    # GHCR_USERNAME/GHCR_TOKEN SENGAJA cuma warning — server tanpa akses
-    # internet ke ghcr.io sama sekali (jaringan internal tertutup) bisa
-    # deploy murni dari bundle tar.gz Release (menu "Load image dari bundle"),
-    # tidak pernah butuh kredensial ini. Validasi keras dipindah ke
-    # action_pull sendiri, satu-satunya tempat yang benar-benar butuh ini.
-    if [[ -z "${GHCR_USERNAME:-}" || -z "${GHCR_TOKEN:-}" ]]; then
-        log_warn "GHCR_USERNAME/GHCR_TOKEN kosong di .env — 'Pull image' (menu 1/2) tidak akan bisa dipakai. Kalau deploy murni dari bundle tar.gz Release, ini boleh dikosongkan."
-    fi
+    # GHCR_USERNAME/GHCR_TOKEN SENGAJA TIDAK PERNAH ada di .env (lihat
+    # install.sh) — cuma dipakai sesaat untuk `docker login`, tidak pernah
+    # dibaca container yang jalan, jadi ditanyakan interaktif langsung di
+    # action_pull tiap kali dibutuhkan. Supaya tidak nongkrong di file yang
+    # bisa dibaca dev lain yang share akses server ini.
     if [[ -z "${RELEASE_VERSION:-}" ]]; then
         log_error "RELEASE_VERSION kosong di .env — wajib diisi (mis. v0.1.0, atau 'latest')."
         missing=1
@@ -249,13 +253,33 @@ bootstrap_tls() {
 
 # ── Aksi ──────────────────────────────────────────────────────────────────
 action_pull() {
-    if [[ -z "${GHCR_OWNER:-}" || -z "${GHCR_REPO:-}" || -z "${GHCR_USERNAME:-}" || -z "${GHCR_TOKEN:-}" ]]; then
-        log_error "GHCR_OWNER/GHCR_REPO/GHCR_USERNAME/GHCR_TOKEN kosong di .env — tidak bisa pull. Kalau server ini tidak punya akses ke ghcr.io, pakai menu \"Load image dari bundle\" (tar.gz dari GitHub Release) sebagai gantinya."
+    if [[ -z "${GHCR_OWNER:-}" || -z "${GHCR_REPO:-}" ]]; then
+        log_error "GHCR_OWNER/GHCR_REPO kosong di .env — tidak bisa pull. Kalau server ini tidak punya akses ke ghcr.io, pakai menu \"Load image dari bundle\" (tar.gz dari GitHub Release) sebagai gantinya."
         return 1
     fi
-    log_info "Login ke ghcr.io sebagai $GHCR_USERNAME..."
-    echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin \
-        || { log_error "Docker login gagal — cek GHCR_USERNAME/GHCR_TOKEN di .env."; return 1; }
+
+    # GHCR_USERNAME/GHCR_TOKEN SENGAJA ditanyakan di sini, BUKAN dibaca dari
+    # .env — kredensial ini cuma dipakai sesaat untuk login, tidak pernah
+    # disimpan ke disk, jadi tidak nongkrong di file yang bisa dibaca dev lain
+    # yang share akses server ini. Ditanya ulang tiap kali menu ini dipakai.
+    local ghcr_username ghcr_token
+    read -rp "GHCR_USERNAME (username GitHub untuk docker login): " ghcr_username
+    if [[ -z "$ghcr_username" ]]; then
+        log_error "GHCR_USERNAME tidak boleh kosong."
+        return 1
+    fi
+    # -s: input tidak ditampilkan di terminal (mirip prompt password sudo).
+    read -rsp "GHCR_TOKEN (PAT scope read:packages, tidak akan ditampilkan): " ghcr_token
+    echo ""
+    if [[ -z "$ghcr_token" ]]; then
+        log_error "GHCR_TOKEN tidak boleh kosong."
+        return 1
+    fi
+
+    log_info "Login ke ghcr.io sebagai $ghcr_username..."
+    echo "$ghcr_token" | docker login ghcr.io -u "$ghcr_username" --password-stdin \
+        || { log_error "Docker login gagal — cek username/token yang barusan diketik."; unset ghcr_token; return 1; }
+    unset ghcr_token ghcr_username
     log_info "Pull image versi $RELEASE_VERSION..."
     $COMPOSE_CMD pull app harvester harvester-seed \
         || { log_error "Pull gagal — cek RELEASE_VERSION di .env memang sudah dirilis (lihat tab Releases repo source)."; return 1; }
@@ -288,10 +312,10 @@ action_load_bundle() {
 }
 
 action_deploy() {
-    if [[ -n "${GHCR_USERNAME:-}" && -n "${GHCR_TOKEN:-}" ]]; then
+    if [[ "${PULL_MODE:-true}" == "true" ]]; then
         action_pull || return 1
     else
-        log_warn "GHCR_* kosong — melewati pull, asumsi image sudah dimuat lewat \"Load image dari bundle\". Kalau belum, batalkan dan jalankan menu itu dulu."
+        log_warn "PULL_MODE=false — melewati pull, asumsi image sudah dimuat lewat \"Load image dari bundle\". Kalau belum, batalkan dan jalankan menu itu dulu."
         confirm "Lanjut deploy dengan image yang sudah ada secara lokal?" || return 1
     fi
     ensure_nginx_conf
@@ -323,10 +347,10 @@ action_set_version() {
     fi
     export RELEASE_VERSION="$new_version"
     log_info "Pindah ke versi $new_version..."
-    if [[ -n "${GHCR_USERNAME:-}" && -n "${GHCR_TOKEN:-}" ]]; then
+    if [[ "${PULL_MODE:-true}" == "true" ]]; then
         action_pull || return 1
     else
-        log_warn "GHCR_* kosong — pastikan sudah 'Load image dari bundle' untuk tag $new_version SEBELUM lanjut, kalau belum batalkan dulu."
+        log_warn "PULL_MODE=false — pastikan sudah 'Load image dari bundle' untuk tag $new_version SEBELUM lanjut, kalau belum batalkan dulu."
         confirm "Image untuk versi $new_version sudah dimuat lokal, lanjutkan?" || return 1
     fi
     $COMPOSE_CMD up -d --no-deps --force-recreate app harvester

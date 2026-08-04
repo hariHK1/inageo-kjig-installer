@@ -2,8 +2,8 @@
 
 Repo operasional untuk deploy [inageo-kjig](https://github.com/hariHK1/inageo-kjig) (nama kode `inageo-mapviewer`) via Docker Compose. **Repo ini tidak berisi source code aplikasi sama sekali** — image `app` dan `harvester` dibangun & di-tag versi oleh GitHub Actions di repo source, lalu di-publish ke GHCR (`ghcr.io`). Server produksi cukup clone repo kecil ini, lalu ambil image dengan salah satu dari **dua cara**:
 
-- **Pull langsung dari GHCR** — server butuh akses internet ke `ghcr.io` + kredensial (`GHCR_USERNAME`/`GHCR_TOKEN` di `.env`).
-- **Load dari bundle tar.gz** — untuk server **tanpa akses internet ke ghcr.io** (mis. jaringan internal tertutup). Setiap rilis, workflow yang sama juga `docker save` kedua image jadi satu `.tar.gz` dan melampirkannya sebagai asset di halaman GitHub Release repo source. Download manual di mesin yang punya internet, transfer ke server ini (scp/rsync/USB), lalu `./deploy.sh` → menu **16) Load image dari bundle**. `GHCR_USERNAME`/`GHCR_TOKEN` boleh dikosongkan kalau selalu pakai jalur ini — tapi **`GHCR_OWNER`/`GHCR_REPO` tetap wajib diisi di kedua mode** (dipakai membentuk nama image yang dicari `docker compose`, harus sama persis dengan owner/nama repo GitHub source — cek lewat `git remote -v` di repo source kalau ragu).
+- **Pull langsung dari GHCR** (`PULL_MODE=true` di `.env`) — server butuh akses internet ke `ghcr.io`. Kredensial (username + PAT scope `read:packages`) **tidak pernah disimpan di `.env`** — `deploy.sh` menanyakannya interaktif setiap kali `docker login` dibutuhkan (menu **1) Pull** / **3) Ganti versi**), input token disembunyikan di terminal dan tidak ditulis ke disk. Ini sengaja: server sering diakses banyak dev lewat SSH/shared account, dan `.env` gampang terbaca siapa pun yang punya akses baca file — token yang disimpan di sana bocor ke semua orang itu. Buat Personal Access Token **baru** khusus ini (GitHub → Settings → Developer settings → Personal access tokens → Fine-grained, scope minimal `read:packages`) — jangan reuse token yang pernah ter-expose di tempat lain (chat, commit, dsb), anggap token begitu selalu sudah bocor.
+- **Load dari bundle tar.gz** (`PULL_MODE=false` di `.env`) — untuk server **tanpa akses internet ke ghcr.io** (mis. jaringan internal tertutup), tidak pernah butuh `docker login`. Setiap rilis, workflow yang sama juga `docker save` kedua image jadi satu `.tar.gz` dan melampirkannya sebagai asset di halaman GitHub Release repo source. Download manual di mesin yang punya internet, transfer ke server ini (scp/rsync/USB), lalu `./deploy.sh` → menu **16) Load image dari bundle**. **`GHCR_OWNER`/`GHCR_REPO` tetap wajib diisi di kedua mode** (dipakai membentuk nama image yang dicari `docker compose`, harus sama persis dengan owner/nama repo GitHub source — cek lewat `git remote -v` di repo source kalau ragu).
 
 ## Alur rilis (dari repo source)
 
@@ -30,7 +30,7 @@ cd inageo-kjig-installer
 ./install.sh
 ```
 
-Wizard akan tanya dulu mode ambil image (pull GHCR vs bundle — lihat di atas), lalu: kredensial GHCR (kalau pilih pull; buat Personal Access Token **baru**, scope `read:packages` saja — jangan reuse token lama), versi rilis, domain/TLS, jumlah replica, port, sumber data harvest & basemap kustom (opsional, runtime), dan men-generate semua password (Postgres/Redis/Redis-queue/API_ACCESS_TOKEN) otomatis.
+Wizard akan tanya dulu mode ambil image (pull GHCR vs bundle — lihat di atas; kredensial GHCR-nya sendiri **tidak** ditanya di sini, baru diminta interaktif oleh `deploy.sh` saat benar-benar dibutuhkan), lalu versi rilis, domain/TLS, jumlah replica, port, sumber data harvest & basemap kustom (opsional, runtime), dan men-generate semua password (Postgres/Redis/Redis-queue/API_ACCESS_TOKEN) otomatis.
 
 Untuk server internal/dev tanpa domain publik (mis. IP `192.168.x.x`), jawab "ya" di pertanyaan "di belakang WAF, atau internal/dev tanpa TLS?" — nginx akan jalan HTTP polos tanpa certbot.
 

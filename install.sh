@@ -217,7 +217,7 @@ run_wizard() {
     log_info "=== Registry (GHCR) ==="
     echo "Image app & harvester dibangun & di-tag GitHub Actions di repo source,"
     echo "installer ini cuma pull/load, tidak build apa pun."
-    local GHCR_OWNER GHCR_REPO GHCR_USERNAME="" GHCR_TOKEN="" RELEASE_VERSION
+    local GHCR_OWNER GHCR_REPO RELEASE_VERSION
     RELEASE_VERSION=$(ask_required "RELEASE_VERSION (tag rilis, mis. v0.1.0 — atau 'latest', tidak reproducible)")
     echo ""
     echo "Owner & nama repo GitHub source (HARUS SAMA PERSIS — kalau salah, docker"
@@ -226,18 +226,31 @@ run_wizard() {
     echo "kalau tidak yakin nama repo persisnya."
     GHCR_OWNER=$(ask_required "GHCR_OWNER (owner GitHub, mis. hariHK1)")
     GHCR_REPO=$(ask_required "GHCR_REPO (nama repo GitHub source, mis. inageo-kjig)")
+    # Docker/GHCR MEWAJIBKAN nama image lowercase (workflow release.yml di repo
+    # source sudah lowercase-kan github.repository sebelum bikin tag image) —
+    # normalisasi di sini juga, supaya username GitHub asli yang mengandung
+    # huruf besar (mis. "hariHK1") tidak bikin `docker pull`/`up` gagal dengan
+    # error "invalid reference format".
+    GHCR_OWNER=$(echo "$GHCR_OWNER" | tr '[:upper:]' '[:lower:]')
+    GHCR_REPO=$(echo "$GHCR_REPO" | tr '[:upper:]' '[:lower:]')
     echo ""
     echo "Server ini nanti ambil image dengan cara: docker pull langsung dari"
     echo "ghcr.io (butuh akses internet dari server ke ghcr.io), ATAU load dari"
     echo "bundle tar.gz Release yang kamu download manual & transfer sendiri"
     echo "(cocok untuk server di jaringan internal tanpa akses ghcr.io)."
+    echo ""
+    echo "CATATAN: username/token GHCR SENGAJA TIDAK ditanyakan/disimpan di sini —"
+    echo "kredensial itu cuma dipakai sesaat untuk 'docker login' (tidak pernah"
+    echo "dibaca container yang jalan), jadi deploy.sh akan menanyakannya"
+    echo "interaktif tiap kali menu Pull/Deploy dipakai (input token disembunyikan"
+    echo "saat diketik), supaya tidak nongkrong di file yang bisa dibaca dev lain"
+    echo "yang share akses server ini."
+    local PULL_MODE
     if confirm "Server ini punya akses internet ke ghcr.io (mode pull langsung)?"; then
-        GHCR_USERNAME=$(ask_required "GHCR_USERNAME (username GitHub kamu, untuk docker login)")
-        echo "Buat Personal Access Token BARU khusus ini (scope read:packages saja) —"
-        echo "JANGAN reuse token yang pernah ditempel di chat/tempat lain, anggap itu sudah bocor."
-        GHCR_TOKEN=$(ask_required "GHCR_TOKEN (PAT scope read:packages)")
+        PULL_MODE="true"
     else
-        log_info "GHCR_USERNAME/TOKEN dikosongkan — pakai menu \"Load image dari bundle\" di deploy.sh setelah setup ini selesai. Download tar.gz dari halaman Release repo source, transfer ke server ini, baru load."
+        PULL_MODE="false"
+        log_info "Mode bundle dipilih — pakai menu \"Load image dari bundle\" di deploy.sh setelah setup ini selesai. Download tar.gz dari halaman Release repo source, transfer ke server ini, baru load."
     fi
 
     echo ""
@@ -396,6 +409,7 @@ run_wizard() {
     echo ""
     log_info "=== Ringkasan ==="
     echo "GHCR                  : $GHCR_OWNER/$GHCR_REPO (versi: $RELEASE_VERSION)"
+    echo "Cara ambil image      : $([ "$PULL_MODE" = "true" ] && echo "pull langsung dari ghcr.io" || echo "load dari bundle tar.gz")"
     echo "Domain/origin         : $DOMAIN ($APP_ORIGIN)"
     if [[ "$BEHIND_WAF" == "true" ]]; then
         echo "TLS                   : ditangani WAF / tanpa TLS (BEHIND_WAF=true)"
@@ -435,12 +449,14 @@ run_wizard() {
 # edit di sini kapan pun, lalu 'docker compose up -d app' cukup (TIDAK perlu
 # pull/rilis baru). Lihat README.md.
 
-# === Registry (GHCR) ===
+# === Registry (GHCR) — username/token GHCR SENGAJA TIDAK di sini,
+# deploy.sh menanyakannya interaktif tiap dibutuhkan (lihat README.md) ===
 GHCR_OWNER=$GHCR_OWNER
 GHCR_REPO=$GHCR_REPO
-GHCR_USERNAME=$GHCR_USERNAME
-GHCR_TOKEN=$GHCR_TOKEN
 RELEASE_VERSION=$RELEASE_VERSION
+# true = server ini pull langsung dari ghcr.io; false = selalu pakai menu
+# "Load image dari bundle" (deploy.sh tidak akan mencoba pull otomatis).
+PULL_MODE=$PULL_MODE
 
 # === Konfigurasi backend geoportal (server-side only) ===
 API_ACCESS_TOKEN=$API_ACCESS_TOKEN
