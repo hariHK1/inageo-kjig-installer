@@ -14,24 +14,51 @@
 # ":5432" — syntax tidak valid / perilaku tidak konsisten antar versi Docker
 # Compose. Memisah ke overlay opt-in inilah yang benar-benar membuat "kosong
 # di .env = tidak ter-expose sama sekali", bukan sekadar port kosong.
+#
+# `networks:` di tiap service DITULIS ULANG LENGKAP (bukan cuma nambah
+# `debug`) — SENGAJA, supaya benar tanpa bergantung ke perilaku merge-vs-
+# replace Compose untuk field list (terverifikasi nyata di deployment: base
+# docker-compose.yml menaruh service ini HANYA di network `cache`, yang
+# `internal: true` — Docker tidak akan pernah benar-benar mem-publish host
+# port untuk container yang jaringannya cuma network internal, walau
+# `ports:` di-declare, `docker compose config` tetap menampilkannya seolah
+# valid tapi `docker port`/`docker inspect` membuktikan binding-nya kosong).
+# Network `debug` (non-internal, dideklarasikan di docker-compose.yml) HANYA
+# menambah jalur publish-ke-host; komunikasi antar-container tetap lewat
+# `cache` seperti biasa, tidak ada yang dilepas dari isolasi defaultnya.
 services:
   postgres:
+    networks:
+      - cache
+      - debug
     ports:
       - "${POSTGRES_HOST_PORT:-5432}:5432"
 
   redis:
+    networks:
+      - cache
+      - debug
     ports:
       - "${REDIS_HOST_PORT:-6379}:6379"
 
   redis-queue:
+    networks:
+      - cache
+      - debug
     ports:
       - "${REDIS_QUEUE_HOST_PORT:-6380}:6379"
 
   harvester:
+    networks:
+      - cache
+      - debug
     ports:
       - "${HARVESTER_HOST_PORT:-4000}:4000"
 
   mapproxy:
+    networks:
+      - cache
+      - debug
     ports:
       - "${MAPPROXY_HOST_PORT:-8081}:80"
 

@@ -176,3 +176,14 @@ networks:
   cache:
     driver: bridge
     internal: true
+  # Non-internal, TIDAK dipakai service mana pun di file ini secara default
+  # (murni deklarasi, harmless kalau tidak ada container yang join). HANYA
+  # dipakai docker-compose.ports.yml untuk service yang mau di-expose ke host
+  # — Docker TIDAK BISA membuat NAT/port-forward host->container untuk
+  # container yang jaringannya cuma `cache` (internal:true SENGAJA menutup
+  # rute itu, itulah tujuan flag-nya). Tanpa network kedua ini, menambahkan
+  # `ports:` saja di overlay TIDAK CUKUP — port yang "ter-declare" tetap
+  # tidak pernah benar-benar published (`docker port` kosong, terverifikasi
+  # nyata di deployment, bukan teori).
+  debug:
+    driver: bridge
