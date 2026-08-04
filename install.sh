@@ -559,17 +559,160 @@ prepare_dirs() {
     fi
 }
 
+# ── 4. Validasi .env yang sudah ada ─────────────────────────────────────────
+# Var WAJIB (stack tidak akan jalan benar tanpa ini) — dicek kalau .env sudah
+# ada, supaya rilis baru yang menambah var wajib baru (mis.
+# DASHBOARD_SESSION_SECRET di v0.2.0) tidak diam-diam bikin instalasi LAMA
+# gagal begitu di-deploy (app crash-loop tanpa penjelasan). Daftar ini sengaja
+# sinkron dengan yang divalidasi check_env() di deploy.sh — dua lapis, bukan
+# duplikat sia-sia (installer ini yang pertama kali dijalankan, deploy.sh yang
+# terakhir sebelum stack benar-benar naik).
+REQUIRED_ENV_VARS=(
+    GHCR_OWNER GHCR_REPO RELEASE_VERSION DOMAIN
+    API_ACCESS_TOKEN DASHBOARD_SESSION_SECRET
+    POSTGRES_PASSWORD REDIS_QUEUE_PASSWORD REDIS_PASSWORD
+)
+# Var opsional yang BARU ditambahkan (fitur terkait mati kalau kosong, BUKAN
+# error) — cukup diinfokan, tidak memblokir apa pun.
+OPTIONAL_ENV_VARS=(ADMIN_API_TOKEN RECAPTCHA_SITE_KEY RECAPTCHA_SECRET_KEY)
+
+# Baris "KEY=<isi tidak kosong>" ada di .env — BUKAN `source .env` (sengaja
+# aman dari isi .env yang aneh-aneh/hand-edited, mirror gaya load_env_file di
+# deploy.sh), cuma cek keberadaan+isi, tidak memuat nilainya ke shell. Dipakai
+# untuk var WAJIB — kosong sama parahnya dengan tidak ada sama sekali.
+env_var_present() {
+    grep -qE "^$1=.+" "$ENV_FILE" 2>/dev/null
+}
+
+# Baris "KEY=" ada di .env APA PUN isinya (termasuk kosong) — dipakai untuk
+# var OPSIONAL, karena baris kosong berarti sudah pernah diputuskan
+# ("fiturnya sengaja dimatikan"), BUKAN "belum ditangani sama sekali". Kalau
+# pakai env_var_present di sini, ADMIN_API_TOKEN= yang sengaja dikosongkan
+# wizard akan terus-menerus dilaporkan "kurang" walau sudah benar apa adanya.
+env_key_exists() {
+    grep -qE "^$1=" "$ENV_FILE" 2>/dev/null
+}
+
+# Set (replace in-place kalau baris sudah ada apa pun isinya) atau tambah
+# (append kalau baris benar-benar belum pernah ada) satu var — mirror pola
+# ensure_secret() di deploy.sh, supaya re-run patch_missing_env tidak pernah
+# bikin baris duplikat untuk key yang sama.
+set_env_var() {
+    local var_name="$1" value="$2"
+    if env_key_exists "$var_name"; then
+        sed -i "s#^${var_name}=.*#${var_name}=${value}#" "$ENV_FILE"
+    else
+        echo "${var_name}=${value}" >> "$ENV_FILE"
+    fi
+}
+
+# Mengembalikan 0 (lewat validasi) kalau semua var wajib+opsional-baru sudah
+# ada; 1 kalau ada yang kurang (sudah dicetak daftarnya duluan).
+validate_existing_env() {
+    local missing_required=() missing_optional=()
+    for var in "${REQUIRED_ENV_VARS[@]}"; do
+        env_var_present "$var" || missing_required+=("$var")
+    done
+    for var in "${OPTIONAL_ENV_VARS[@]}"; do
+        env_key_exists "$var" || missing_optional+=("$var")
+    done
+
+    if [[ ${#missing_required[@]} -eq 0 && ${#missing_optional[@]} -eq 0 ]]; then
+        log_ok ".env sudah lengkap — semua variabel yang dikenal installer ini sudah ada."
+        return 0
+    fi
+
+    echo ""
+    if [[ ${#missing_required[@]} -gt 0 ]]; then
+        log_warn "Variabel WAJIB belum ada/kosong di .env (biasanya karena rilis versi baru menambah var baru):"
+        for var in "${missing_required[@]}"; do
+            echo "    - $var"
+        done
+    fi
+    if [[ ${#missing_optional[@]} -gt 0 ]]; then
+        log_info "Variabel opsional belum ada (fitur terkait tetap NONAKTIF, tidak memblokir apa pun):"
+        for var in "${missing_optional[@]}"; do
+            echo "    - $var"
+        done
+    fi
+    echo ""
+    return 1
+}
+
+# Nambah HANYA var yang kurang, append-only — baris yang SUDAH ADA di .env
+# TIDAK disentuh sama sekali (beda dari run_wizard yang timpa seluruh file).
+patch_missing_env() {
+    echo ""
+    log_info "Menambahkan variabel yang kurang ke .env — baris lain TIDAK diubah..."
+
+    local var
+    # Secret — auto-generate tanpa tanya, mirror ensure_secret() di deploy.sh.
+    for var in API_ACCESS_TOKEN DASHBOARD_SESSION_SECRET POSTGRES_PASSWORD REDIS_QUEUE_PASSWORD REDIS_PASSWORD; do
+        if ! env_var_present "$var"; then
+            set_env_var "$var" "$(gen_password)"
+            log_ok "$var digenerate otomatis."
+        fi
+    done
+
+    # Identitas/config — tidak bisa ditebak, WAJIB tanya.
+    if ! env_var_present GHCR_OWNER; then
+        set_env_var GHCR_OWNER "$(ask_required "GHCR_OWNER (owner GitHub, mis. hariHK1)" | tr '[:upper:]' '[:lower:]')"
+    fi
+    if ! env_var_present GHCR_REPO; then
+        set_env_var GHCR_REPO "$(ask_required "GHCR_REPO (nama repo GitHub source)" | tr '[:upper:]' '[:lower:]')"
+    fi
+    if ! env_var_present RELEASE_VERSION; then
+        set_env_var RELEASE_VERSION "$(ask_required "RELEASE_VERSION (mis. v0.2.0-dev)")"
+    fi
+    if ! env_var_present DOMAIN; then
+        set_env_var DOMAIN "$(ask_required "DOMAIN (hostname/IP server ini)")"
+    fi
+
+    # Opsional (fitur toggle) — tanya mau isi atau lewati, TIDAK auto-generate
+    # (kosong itu valid & aman, bukan kondisi darurat seperti secret di atas).
+    # env_key_exists (bukan env_var_present) — baris kosong yang SUDAH ADA
+    # tidak boleh ditimpa ulang tiap kali installer ini dijalankan lagi.
+    if ! env_key_exists ADMIN_API_TOKEN; then
+        set_env_var ADMIN_API_TOKEN ""
+    fi
+    if ! env_key_exists RECAPTCHA_SITE_KEY || ! env_key_exists RECAPTCHA_SECRET_KEY; then
+        if confirm "Aktifkan reCAPTCHA di form login dashboard admin? (opsional)"; then
+            env_key_exists RECAPTCHA_SITE_KEY || set_env_var RECAPTCHA_SITE_KEY "$(ask_required "RECAPTCHA_SITE_KEY")"
+            env_key_exists RECAPTCHA_SECRET_KEY || set_env_var RECAPTCHA_SECRET_KEY "$(ask_required "RECAPTCHA_SECRET_KEY")"
+        else
+            env_key_exists RECAPTCHA_SITE_KEY || set_env_var RECAPTCHA_SITE_KEY ""
+            env_key_exists RECAPTCHA_SECRET_KEY || set_env_var RECAPTCHA_SECRET_KEY ""
+        fi
+    fi
+
+    echo ""
+    log_ok "Selesai — .env diperbarui. Jalankan './deploy.sh' untuk menerapkan (container yang sudah jalan perlu di-recreate supaya membaca nilai baru)."
+}
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 print_banner
 
 check_or_install_docker || exit 1
 
 if [[ -f "$ENV_FILE" ]]; then
-    log_warn ".env sudah ada."
-    if confirm "Timpa dengan wizard baru? (pilih 'n' untuk pakai .env yang sudah ada apa adanya)"; then
-        run_wizard
+    log_info ".env sudah ada — memvalidasi kelengkapannya dulu (bukan langsung tanya timpa atau tidak)..."
+    if validate_existing_env; then
+        if confirm "Semua variabel yang dikenal sudah lengkap. Tetap jalankan wizard dari awal? (menimpa SEMUA nilai yang ada)"; then
+            run_wizard
+        else
+            log_info "Memakai .env yang sudah ada tanpa perubahan."
+        fi
     else
-        log_info "Memakai .env yang sudah ada tanpa perubahan."
+        echo "Pilihan:"
+        echo "  1) Tambahkan HANYA variabel yang kurang (nilai lain di .env TIDAK disentuh) [rekomendasi]"
+        echo "  2) Jalankan wizard penuh (SEMUA nilai ditimpa ulang dari awal)"
+        echo "  3) Batal — saya urus manual"
+        read -rp "Pilih [1/2/3]: " choice
+        case "$choice" in
+            1) patch_missing_env ;;
+            2) run_wizard ;;
+            *) log_info "Tidak ada perubahan pada .env." ;;
+        esac
     fi
 else
     run_wizard
