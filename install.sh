@@ -345,9 +345,11 @@ run_wizard() {
 
     echo ""
     log_info "=== Backend geoportal (server-side only) ==="
-    local API_ACCESS_TOKEN APP_ORIGIN
+    local API_ACCESS_TOKEN APP_ORIGIN DASHBOARD_SESSION_SECRET
     API_ACCESS_TOKEN="$(gen_password)"
     log_ok "API_ACCESS_TOKEN digenerate otomatis (dipakai bersama app & harvester)."
+    DASHBOARD_SESSION_SECRET="$(gen_password)"
+    log_ok "DASHBOARD_SESSION_SECRET digenerate otomatis (cookie sesi dashboard admin /admin — WAJIB ada, container app tidak akan start tanpa ini)."
     if [[ "$BEHIND_WAF" == "true" && "$TLS_MODE" == "" && -z "$WAF_TRUSTED_CIDR" ]]; then
         # Kemungkinan besar internal/dev tanpa TLS sama sekali — tawarkan http://.
         if confirm "Origin publik pakai http:// (bukan https://)? Jawab 'y' kalau server ini benar-benar tanpa TLS (internal/dev)."; then
@@ -359,6 +361,21 @@ run_wizard() {
         APP_ORIGIN="https://$DOMAIN"
     fi
     echo "APP_ORIGIN di-set ke: $APP_ORIGIN (dipakai cek CORS WMS + dibaca browser — sepenuhnya runtime, bisa diedit lagi kapan pun di .env tanpa rilis baru)."
+
+    echo ""
+    log_info "=== Dashboard admin (/admin) ==="
+    echo "Akun login TIDAK dibuat di sini — setelah deploy selesai (menu 2 di"
+    echo "deploy.sh), jalankan sekali:"
+    echo "  docker compose run --rm -e INITIAL_ADMIN_USERNAME=<user> -e INITIAL_ADMIN_PASSWORD=<pass> harvester node dist/scripts/seed-admin-user.js"
+    local RECAPTCHA_SITE_KEY RECAPTCHA_SECRET_KEY
+    if confirm "Aktifkan reCAPTCHA di form login dashboard admin? (opsional — butuh site key + secret key dari google.com/recaptcha/admin, pilih reCAPTCHA v2 Checkbox, domain harus sama persis dengan DOMAIN di atas)"; then
+        RECAPTCHA_SITE_KEY=$(ask_required "RECAPTCHA_SITE_KEY")
+        RECAPTCHA_SECRET_KEY=$(ask_required "RECAPTCHA_SECRET_KEY")
+    else
+        RECAPTCHA_SITE_KEY=""
+        RECAPTCHA_SECRET_KEY=""
+        log_info "reCAPTCHA dilewati — login /admin tanpa CAPTCHA. Bisa diaktifkan kapan pun nanti dengan isi RECAPTCHA_SITE_KEY/RECAPTCHA_SECRET_KEY di .env + restart container app, tanpa rilis baru."
+    fi
 
     echo ""
     log_info "=== Sumber data & basemap (runtime — bisa diedit lagi kapan pun di .env) ==="
@@ -426,6 +443,7 @@ run_wizard() {
         echo "TLS                   : Let's Encrypt otomatis ($ACME_EMAIL)"
     fi
     echo "Jumlah replica app    : $APP_REPLICAS"
+    echo "reCAPTCHA login admin : $([ -n "$RECAPTCHA_SITE_KEY" ] && echo "aktif" || echo "tidak aktif")"
     echo "Port publik           : HTTP=$HTTP_PORT HTTPS=$HTTPS_PORT"
     if [[ "$EXPOSE_PORTS" == "true" ]]; then
         echo "Port debug (exposed)  : postgres=$POSTGRES_HOST_PORT redis=$REDIS_HOST_PORT redis-queue=$REDIS_QUEUE_HOST_PORT harvester=$HARVESTER_HOST_PORT mapproxy=$MAPPROXY_HOST_PORT app=${APP_DIRECT_PORT:-(tidak)}"
@@ -467,6 +485,15 @@ PULL_MODE=$PULL_MODE
 
 # === Konfigurasi backend geoportal (server-side only) ===
 API_ACCESS_TOKEN=$API_ACCESS_TOKEN
+# Guard proxy /apis/[...path] (POST/DELETE) — endpoint itu tidak dipakai UI
+# aplikasi ini sendiri, kosong = method itu selalu ditolak (gagal-tertutup).
+# Isi manual hanya kalau memang butuh memicunya dari sistem lain.
+ADMIN_API_TOKEN=
+# Cookie sesi dashboard admin /admin — WAJIB ada, jangan dikosongkan manual.
+DASHBOARD_SESSION_SECRET=$DASHBOARD_SESSION_SECRET
+# reCAPTCHA login /admin/login — opsional, dua-duanya kosong = mati.
+RECAPTCHA_SITE_KEY=$RECAPTCHA_SITE_KEY
+RECAPTCHA_SECRET_KEY=$RECAPTCHA_SECRET_KEY
 
 # === Config publik app (runtime, lihat catatan di atas) ===
 APP_ORIGIN=$APP_ORIGIN

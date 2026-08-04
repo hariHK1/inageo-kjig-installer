@@ -13,6 +13,15 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       ALLOWED_BUCKETS: ${ALLOWED_BUCKETS}
+      # Guard proxy /apis/[...path] & /apis/harvest/csw-records/[uuid] (POST/
+      # DELETE) — lihat src/app/apis/_lib/admin-auth.ts di repo source.
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN}
+      # Secret cookie sesi dashboard /admin/** — WAJIB, container gagal start
+      # (throw) kalau kosong.
+      DASHBOARD_SESSION_SECRET: ${DASHBOARD_SESSION_SECRET}
+      # reCAPTCHA login /admin/login — opsional, dua-duanya kosong = mati.
+      RECAPTCHA_SITE_KEY: ${RECAPTCHA_SITE_KEY}
+      RECAPTCHA_SECRET_KEY: ${RECAPTCHA_SECRET_KEY}
       # Config publik — dibaca RUNTIME oleh image (src/lib/runtimeConfig.ts di
       # repo source), BUKAN di-bake saat build lagi. Ganti nilai di .env +
       # `docker compose up -d app` cukup, tidak perlu tag rilis baru sama
