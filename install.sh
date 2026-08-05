@@ -659,50 +659,100 @@ validate_existing_env() {
 
 # Nambah HANYA var yang kurang, append-only — baris yang SUDAH ADA di .env
 # TIDAK disentuh sama sekali (beda dari run_wizard yang timpa seluruh file).
+#
+# PENTING: array $added di bawah BUKAN cuma buat laporan — sebelumnya loop
+# auto-generate secret di sini hardcode NAMA var satu-satu (mis.
+# "API_ACCESS_TOKEN DASHBOARD_SESSION_SECRET POSTGRES_PASSWORD ..."), jadi
+# waktu ELASTIC_PASSWORD ditambah ke REQUIRED_ENV_VARS (via marker
+# .env.example, lihat atas), var itu TERDETEKSI kurang tapi TIDAK PERNAH
+# benar-benar ditambahkan — validate_existing_env lapor "kurang" selamanya,
+# padahal user sudah pilih "tambahkan yang kurang" berkali-kali (bug nyata,
+# dilaporkan user). Loop di bawah sekarang jalan atas NAMA POLA (var apa pun
+# yang berakhiran _PASSWORD/_TOKEN/_SECRET), bukan daftar nama hardcode —
+# var wajib baru dengan pola nama itu otomatis ikut ter-generate, tidak
+# perlu edit fungsi ini lagi. Fallback generik di paling akhir memastikan
+# TIDAK ADA var wajib yang bisa "terdeteksi tapi tidak pernah diisi" lagi
+# walau namanya tidak match pola apa pun / belum sempat dikasih prompt
+# bespoke di sini.
 patch_missing_env() {
     echo ""
     log_info "Menambahkan variabel yang kurang ke .env — baris lain TIDAK diubah..."
-
+    local added=()
     local var
-    # Secret — auto-generate tanpa tanya, mirror ensure_secret() di deploy.sh.
-    for var in API_ACCESS_TOKEN DASHBOARD_SESSION_SECRET POSTGRES_PASSWORD REDIS_QUEUE_PASSWORD REDIS_PASSWORD; do
-        if ! env_var_present "$var"; then
+
+    # Var wajib berpola rahasia — aman digenerate otomatis tanpa tanya,
+    # SIAPA PUN nama var-nya (cocok pola), mirror ensure_secret() di deploy.sh.
+    for var in "${REQUIRED_ENV_VARS[@]}"; do
+        if [[ "$var" =~ (_PASSWORD|_TOKEN|_SECRET)$ ]] && ! env_var_present "$var"; then
             set_env_var "$var" "$(gen_password)"
             log_ok "$var digenerate otomatis."
+            added+=("$var (digenerate otomatis)")
         fi
     done
 
-    # Identitas/config — tidak bisa ditebak, WAJIB tanya.
+    # Identitas/config yang sudah dikenal — tidak bisa ditebak, WAJIB tanya
+    # dengan hint spesifik per-var.
     if ! env_var_present GHCR_OWNER; then
         set_env_var GHCR_OWNER "$(ask_required "GHCR_OWNER (owner GitHub, mis. hariHK1)" | tr '[:upper:]' '[:lower:]')"
+        added+=("GHCR_OWNER (diisi manual)")
     fi
     if ! env_var_present GHCR_REPO; then
         set_env_var GHCR_REPO "$(ask_required "GHCR_REPO (nama repo GitHub source)" | tr '[:upper:]' '[:lower:]')"
+        added+=("GHCR_REPO (diisi manual)")
     fi
     if ! env_var_present RELEASE_VERSION; then
         set_env_var RELEASE_VERSION "$(ask_required "RELEASE_VERSION (mis. v0.2.0-dev)")"
+        added+=("RELEASE_VERSION (diisi manual)")
     fi
     if ! env_var_present DOMAIN; then
         set_env_var DOMAIN "$(ask_required "DOMAIN (hostname/IP server ini)")"
+        added+=("DOMAIN (diisi manual)")
     fi
 
-    # Opsional (fitur toggle) — tanya mau isi atau lewati, TIDAK auto-generate
-    # (kosong itu valid & aman, bukan kondisi darurat seperti secret di atas).
+    # Fallback generik — var WAJIB apa pun yang MASIH kurang di titik ini
+    # (bukan pola rahasia, dan tidak match prompt bespoke di atas) berarti
+    # var baru yang promptnya belum sempat ditambah manual. Ditanya generik
+    # daripada diam-diam dilewati (persis bug yang diperbaiki di atas).
+    for var in "${REQUIRED_ENV_VARS[@]}"; do
+        if ! env_var_present "$var"; then
+            set_env_var "$var" "$(ask_required "$var (variabel wajib baru, belum ada prompt khusus)")"
+            added+=("$var (diisi manual — fallback generik)")
+        fi
+    done
+
+    # Opsional (fitur toggle) — RECAPTCHA butuh tanya berpasangan (aktifkan
+    # keduanya atau tidak sama sekali), ditangani bespoke duluan.
     # env_key_exists (bukan env_var_present) — baris kosong yang SUDAH ADA
     # tidak boleh ditimpa ulang tiap kali installer ini dijalankan lagi.
-    if ! env_key_exists ADMIN_API_TOKEN; then
-        set_env_var ADMIN_API_TOKEN ""
-    fi
     if ! env_key_exists RECAPTCHA_SITE_KEY || ! env_key_exists RECAPTCHA_SECRET_KEY; then
         if confirm "Aktifkan reCAPTCHA di form login dashboard admin? (opsional)"; then
-            env_key_exists RECAPTCHA_SITE_KEY || set_env_var RECAPTCHA_SITE_KEY "$(ask_required "RECAPTCHA_SITE_KEY")"
-            env_key_exists RECAPTCHA_SECRET_KEY || set_env_var RECAPTCHA_SECRET_KEY "$(ask_required "RECAPTCHA_SECRET_KEY")"
+            env_key_exists RECAPTCHA_SITE_KEY || { set_env_var RECAPTCHA_SITE_KEY "$(ask_required "RECAPTCHA_SITE_KEY")"; added+=("RECAPTCHA_SITE_KEY (diisi manual)"); }
+            env_key_exists RECAPTCHA_SECRET_KEY || { set_env_var RECAPTCHA_SECRET_KEY "$(ask_required "RECAPTCHA_SECRET_KEY")"; added+=("RECAPTCHA_SECRET_KEY (diisi manual)"); }
         else
-            env_key_exists RECAPTCHA_SITE_KEY || set_env_var RECAPTCHA_SITE_KEY ""
-            env_key_exists RECAPTCHA_SECRET_KEY || set_env_var RECAPTCHA_SECRET_KEY ""
+            env_key_exists RECAPTCHA_SITE_KEY || { set_env_var RECAPTCHA_SITE_KEY ""; added+=("RECAPTCHA_SITE_KEY (dikosongkan)"); }
+            env_key_exists RECAPTCHA_SECRET_KEY || { set_env_var RECAPTCHA_SECRET_KEY ""; added+=("RECAPTCHA_SECRET_KEY (dikosongkan)"); }
         fi
     fi
 
+    # Sisa var opsional (ADMIN_API_TOKEN & apa pun yang belum dikenal
+    # nanti) — dikosongkan saja tanpa tanya, kosong itu valid & aman utk
+    # var opsional (beda dari RECAPTCHA di atas yang butuh keputusan aktif).
+    for var in "${OPTIONAL_ENV_VARS[@]}"; do
+        if ! env_key_exists "$var"; then
+            set_env_var "$var" ""
+            added+=("$var (dikosongkan, fitur nonaktif)")
+        fi
+    done
+
+    echo ""
+    if [[ ${#added[@]} -gt 0 ]]; then
+        log_ok "Variabel yang ditambahkan ke .env:"
+        for a in "${added[@]}"; do
+            echo "    - $a"
+        done
+    else
+        log_info "Tidak ada variabel yang perlu ditambahkan — .env sudah lengkap."
+    fi
     echo ""
     log_ok "Selesai — .env diperbarui. Jalankan './deploy.sh' untuk menerapkan (container yang sudah jalan perlu di-recreate supaya membaca nilai baru)."
 }
