@@ -572,19 +572,27 @@ prepare_dirs() {
 # ── 4. Validasi .env yang sudah ada ─────────────────────────────────────────
 # Var WAJIB (stack tidak akan jalan benar tanpa ini) — dicek kalau .env sudah
 # ada, supaya rilis baru yang menambah var wajib baru (mis.
-# DASHBOARD_SESSION_SECRET di v0.2.0) tidak diam-diam bikin instalasi LAMA
-# gagal begitu di-deploy (app crash-loop tanpa penjelasan). Daftar ini sengaja
-# sinkron dengan yang divalidasi check_env() di deploy.sh — dua lapis, bukan
-# duplikat sia-sia (installer ini yang pertama kali dijalankan, deploy.sh yang
-# terakhir sebelum stack benar-benar naik).
-REQUIRED_ENV_VARS=(
-    GHCR_OWNER GHCR_REPO RELEASE_VERSION DOMAIN
-    API_ACCESS_TOKEN DASHBOARD_SESSION_SECRET
-    POSTGRES_PASSWORD REDIS_QUEUE_PASSWORD REDIS_PASSWORD ELASTIC_PASSWORD
+# DASHBOARD_SESSION_SECRET di v0.2.0, ELASTIC_PASSWORD di v0.2.3) tidak
+# diam-diam bikin instalasi LAMA gagal begitu di-deploy (app crash-loop tanpa
+# penjelasan).
+#
+# Daftar ini DIDERIVASI OTOMATIS dari .env.example (baris "KEY=... # @wajib"
+# / "# @opsional"), BUKAN hardcode di sini — dulu ada DUA tempat yang harus
+# disinkron manual tiap kali ada var baru (isi .env.example DAN array ini),
+# gampang lupa salah satu (nyata terjadi beberapa kali). Sekarang cukup tandai
+# baris di .env.example, array ini otomatis ikut. deploy.sh's check_env()
+# masih terpisah (pesan errornya spesifik per-var, tidak mekanis) — dua lapis
+# validasi, bukan duplikat sia-sia (installer ini yang pertama kali
+# dijalankan, deploy.sh yang terakhir sebelum stack benar-benar naik).
+ENV_EXAMPLE_FILE="$SCRIPT_DIR/.env.example"
+mapfile -t REQUIRED_ENV_VARS < <(
+    grep -E '^[A-Z_][A-Z0-9_]*=.*#[[:space:]]*@wajib' "$ENV_EXAMPLE_FILE" |
+        sed -E 's/^([A-Z_][A-Z0-9_]*)=.*/\1/'
 )
-# Var opsional yang BARU ditambahkan (fitur terkait mati kalau kosong, BUKAN
-# error) — cukup diinfokan, tidak memblokir apa pun.
-OPTIONAL_ENV_VARS=(ADMIN_API_TOKEN RECAPTCHA_SITE_KEY RECAPTCHA_SECRET_KEY)
+mapfile -t OPTIONAL_ENV_VARS < <(
+    grep -E '^[A-Z_][A-Z0-9_]*=.*#[[:space:]]*@opsional' "$ENV_EXAMPLE_FILE" |
+        sed -E 's/^([A-Z_][A-Z0-9_]*)=.*/\1/'
+)
 
 # Baris "KEY=<isi tidak kosong>" ada di .env — BUKAN `source .env` (sengaja
 # aman dari isi .env yang aneh-aneh/hand-edited, mirror gaya load_env_file di
