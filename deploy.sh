@@ -152,6 +152,7 @@ check_env() {
     ensure_secret REDIS_PASSWORD "Redis cache tanpa password hanya dilindungi isolasi network" || missing=1
     ensure_secret POSTGRES_PASSWORD "PostGIS tanpa password tidak akan bisa start" || missing=1
     ensure_secret REDIS_QUEUE_PASSWORD "Redis queue tanpa password tidak akan bisa start" || missing=1
+    ensure_secret ELASTIC_PASSWORD "Elasticsearch tanpa password tidak akan bisa start (fitur \"Cari Data\")" || missing=1
     ensure_secret API_ACCESS_TOKEN "tanpa ini SEMUA endpoint harvester menolak permintaan (gagal-tertutup) — app tidak akan bisa baca data harvest sama sekali" || missing=1
     ensure_secret DASHBOARD_SESSION_SECRET "tanpa ini container app GAGAL START total (dashboard admin /admin wajib butuh secret ini)" || missing=1
 
@@ -437,6 +438,49 @@ action_harvester_seed() {
         || { log_error "Seed gagal — pastikan migrasi (menu 15) sudah dijalankan lebih dulu."; return 1; }
 }
 
+action_seed_admin() {
+    # INITIAL_ADMIN_USERNAME/INITIAL_ADMIN_PASSWORD SENGAJA ditanyakan di
+    # sini, BUKAN dibaca dari .env — pola sama persis dengan GHCR_TOKEN di
+    # action_pull: kredensial ini cuma dipakai sesaat untuk seed/reset satu
+    # baris di tabel admin_users, tidak pernah disimpan ke disk.
+    local admin_username admin_password admin_password_confirm
+    read -rp "Email admin dashboard (dipakai sebagai username): " admin_username
+    if [[ -z "$admin_username" ]]; then
+        log_error "Email tidak boleh kosong."
+        return 1
+    fi
+    if ! [[ "$admin_username" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]; then
+        log_error "Username harus berupa email yang valid (mis. nama@instansi.go.id)."
+        return 1
+    fi
+    read -rsp "Password (minimal 8 karakter, tidak akan ditampilkan): " admin_password
+    echo ""
+    if [[ ${#admin_password} -lt 8 ]]; then
+        log_error "Password minimal 8 karakter."
+        unset admin_password
+        return 1
+    fi
+    read -rsp "Ulangi password: " admin_password_confirm
+    echo ""
+    if [[ "$admin_password" != "$admin_password_confirm" ]]; then
+        log_error "Password tidak sama."
+        unset admin_password admin_password_confirm
+        return 1
+    fi
+    unset admin_password_confirm
+
+    log_info "Membuat/reset akun admin \"$admin_username\"..."
+    $COMPOSE_CMD run --rm -e INITIAL_ADMIN_USERNAME="$admin_username" -e INITIAL_ADMIN_PASSWORD="$admin_password" harvester node dist/scripts/seed-admin-user.js
+    local result=$?
+    unset admin_password admin_username
+    if [[ $result -eq 0 ]]; then
+        log_ok "Akun admin siap dipakai login dashboard."
+    else
+        log_error "Seed admin gagal — pastikan migrasi (menu 14) sudah dijalankan lebih dulu."
+        return 1
+    fi
+}
+
 action_renew_tls() {
     if [[ "${BEHIND_WAF:-false}" == "true" ]]; then
         log_warn "BEHIND_WAF=true — TLS ditangani WAF atau tidak dipakai, tidak ada sertifikat lokal untuk diperbarui."
@@ -486,6 +530,7 @@ main_menu() {
         echo "14) Migrasi database harvester (node-pg-migrate up)"
         echo "15) Seed awal simpul_jaringan"
         echo "16) Load image dari bundle (tar.gz Release, tanpa akses ghcr.io)"
+        echo "17) Buat/reset akun admin dashboard"
         echo "0)  Keluar"
         read -rp "Pilih menu: " choice
         case "$choice" in
@@ -505,6 +550,7 @@ main_menu() {
             14) check_env && action_harvester_migrate ;;
             15) check_env && action_harvester_seed ;;
             16) action_load_bundle ;;
+            17) check_env && action_seed_admin ;;
             0) exit 0 ;;
             *) log_warn "Pilihan tidak valid." ;;
         esac

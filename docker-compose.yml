@@ -150,9 +150,38 @@ services:
       REDIS_QUEUE_URL: redis://:${REDIS_QUEUE_PASSWORD}@redis-queue:6379
       API_ACCESS_TOKEN: ${API_ACCESS_TOKEN}
       SCAN_INTERVAL_MS: ${HARVEST_SCAN_INTERVAL_MS:-3600000}
+      # Fitur "Cari Data" (katalog + isi-data) — cuma harvester yang bicara ke
+      # ES, sama seperti Postgres/Redis-queue; app tidak pernah konek langsung
+      # ke sini, semua lewat HTTP API harvester (lihat GET /search/* di source).
+      ELASTICSEARCH_URL: http://elastic:${ELASTIC_PASSWORD}@elasticsearch:9200
+      MAX_FEATURES_PER_LAYER: ${MAX_FEATURES_PER_LAYER:-50000}
     depends_on:
       - postgres
       - redis-queue
+      - elasticsearch
+    networks:
+      - cache
+
+  # Mesin pencari fitur "Cari Data" (katalog + isi-data lintas simpul) — server
+  # dedicated resource tinggi (64GB RAM/32-core/512GB) disiapkan khusus untuk
+  # ini. Single-node (satu server fisik), TANPA `ports:` (internal-only, sama
+  # seperti postgres/redis/mapproxy — lihat catatan network `cache` di bawah).
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "true"
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
+      # Batas heap JVM yang disarankan resmi Elasticsearch ~30-32GB (limit
+      # compressed-OOPs pointer) SEKALIPUN RAM fisik jauh lebih besar — sisa
+      # RAM SENGAJA dibiarkan kosong untuk OS page cache, yang justru krusial
+      # buat performa baca Lucene (bukan pemborosan). Mulai konservatif di
+      # 16GB dari 64GB tersedia, naikkan belakangan kalau index membesar &
+      # perlu lebih (tidak pernah lewat ~30-32GB kapan pun).
+      ES_JAVA_OPTS: -Xms16g -Xmx16g
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
     networks:
       - cache
 
@@ -178,6 +207,7 @@ volumes:
   mapproxy_cache:
   postgres_data:
   redis_queue_data:
+  es_data:
 
 networks:
   web:

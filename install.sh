@@ -424,6 +424,13 @@ run_wizard() {
     log_ok "POSTGRES_PASSWORD & REDIS_QUEUE_PASSWORD digenerate otomatis."
 
     echo ""
+    log_info "=== Elasticsearch (fitur \"Cari Data\" — katalog + isi-data) ==="
+    echo "State PERSISTEN, sama seperti Postgres — siapkan backup (snapshot ES) terpisah setelah deploy."
+    local ELASTIC_PASSWORD
+    ELASTIC_PASSWORD="$(gen_password)"
+    log_ok "ELASTIC_PASSWORD digenerate otomatis."
+
+    echo ""
     log_info "=== Cache tile (Redis, disposable) ==="
     local REDIS_MAXMEMORY REDIS_PASSWORD
     REDIS_MAXMEMORY=$(ask "Batas RAM cache Redis" "512mb")
@@ -515,6 +522,9 @@ REDIS_QUEUE_PASSWORD=$REDIS_QUEUE_PASSWORD
 REDIS_QUEUE_MAXMEMORY=$REDIS_QUEUE_MAXMEMORY
 HARVEST_SCAN_INTERVAL_MS=$HARVEST_SCAN_INTERVAL_MS
 
+# === Elasticsearch (fitur "Cari Data" — katalog + isi-data) ===
+ELASTIC_PASSWORD=$ELASTIC_PASSWORD
+
 # === Object storage untuk preview dokumen harvest (opsional) ===
 MINIO_ENDPOINT=$MINIO_ENDPOINT
 MINIO_REGION=$MINIO_REGION
@@ -570,7 +580,7 @@ prepare_dirs() {
 REQUIRED_ENV_VARS=(
     GHCR_OWNER GHCR_REPO RELEASE_VERSION DOMAIN
     API_ACCESS_TOKEN DASHBOARD_SESSION_SECRET
-    POSTGRES_PASSWORD REDIS_QUEUE_PASSWORD REDIS_PASSWORD
+    POSTGRES_PASSWORD REDIS_QUEUE_PASSWORD REDIS_PASSWORD ELASTIC_PASSWORD
 )
 # Var opsional yang BARU ditambahkan (fitur terkait mati kalau kosong, BUKAN
 # error) — cukup diinfokan, tidak memblokir apa pun.
