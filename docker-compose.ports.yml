@@ -62,6 +62,17 @@ services:
     ports:
       - "${MAPPROXY_HOST_PORT:-8081}:80"
 
+  # Dipakai HANYA untuk akses dev (mis. jalankan harvester lokal, connect ke
+  # ES server ini) — xpack.security tetap aktif (wajib user+password), tapi
+  # tetap batasi akses ini via firewall/VPN di level jaringan server, jangan
+  # buka ke internet publik.
+  elasticsearch:
+    networks:
+      - cache
+      - debug
+    ports:
+      - "${ELASTICSEARCH_HOST_PORT:-9200}:9200"
+
   # Port app SENGAJA TIDAK di sini (lihat docker-compose.app-port.yml) — file
   # ini pakai fallback "${VAR:-default}" di semua service, artinya walau
   # APP_DIRECT_PORT dikosongkan (mis. karena APP_REPLICAS>1, install.sh
