@@ -115,3 +115,63 @@ server {
         include /etc/nginx/snippets/proxy-common.conf;
     }
 }
+
+# ── :8443 — dashboard GlitchTip (Fase 0 observability) ──────────────────────
+# Port TERPISAH dari :443 publik, bukan subpath — GlitchTip berasumsi
+# dijalankan di path root (subpath butuh dukungan reverse-proxy-prefix yang
+# tidak terjamin utuh, link aset bisa patah). auth_basic WAJIB ada — TANPA
+# ini port terbuka = dashboard error-tracking bisa diakses siapa pun yang
+# tahu portnya. deploy.sh men-generate nginx/ops.htpasswd otomatis dari
+# OPS_BASIC_AUTH_USER/PASSWORD di .env sebelum nginx pertama kali start.
+server {
+    listen 8443 ssl;
+    listen [::]:8443 ssl;
+    http2 on;
+    server_name __DOMAIN__;
+
+    ssl_certificate     /etc/letsencrypt/live/__DOMAIN__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__DOMAIN__/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    auth_basic "Ops — akses terbatas";
+    auth_basic_user_file /etc/nginx/ops.htpasswd;
+
+    set $glitchtip_up http://glitchtip:8000;
+
+    location / {
+        proxy_pass $glitchtip_up$request_uri;
+        include /etc/nginx/snippets/proxy-common.conf;
+    }
+}
+
+# ── :8444 — dashboard Uptime Kuma (Fase 0 observability) ────────────────────
+# Sama alasan port terpisah + auth_basic dgn blok :8443 di atas. Uptime Kuma
+# pakai WebSocket (Socket.IO) utk update real-time — sudah didukung lewat
+# $connection_upgrade (map di atas) + proxy-common.conf, tidak perlu
+# konfigurasi tambahan.
+server {
+    listen 8444 ssl;
+    listen [::]:8444 ssl;
+    http2 on;
+    server_name __DOMAIN__;
+
+    ssl_certificate     /etc/letsencrypt/live/__DOMAIN__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__DOMAIN__/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    auth_basic "Ops — akses terbatas";
+    auth_basic_user_file /etc/nginx/ops.htpasswd;
+
+    set $kuma_up http://uptime-kuma:3001;
+
+    location / {
+        proxy_pass $kuma_up$request_uri;
+        include /etc/nginx/snippets/proxy-common.conf;
+    }
+}

@@ -215,6 +215,29 @@ ensure_nginx_conf() {
     fi
 }
 
+# nginx/ops.htpasswd (gitignored) — hash APR1-MD5 dari OPS_BASIC_AUTH_USER/
+# PASSWORD, format yang dimengerti modul auth_basic nginx (dipakai server
+# block :8443/:8444, dashboard GlitchTip/Uptime Kuma — lihat nginx/conf.d).
+# Identik dengan source repo. SELALU ditulis ulang tiap dipanggil (bukan cuma
+# kalau belum ada) — supaya ganti password di .env lalu redeploy langsung
+# kepakai, tanpa langkah manual terpisah. WAJIB dipanggil sebelum
+# `docker compose up` (bind-mount ke file yang belum ada bikin Docker diam-
+# diam bikin DIREKTORI kosong), sama seperti ensure_nginx_conf. Password
+# dilewatkan via stdin (bukan argumen CLI) supaya tidak sempat terlihat di
+# `ps aux` proses lain di server yang sama.
+ensure_ops_htpasswd() {
+    local user="${OPS_BASIC_AUTH_USER:-admin}"
+    local pass="${OPS_BASIC_AUTH_PASSWORD:-}"
+    if [[ -z "$pass" ]]; then
+        log_warn "OPS_BASIC_AUTH_PASSWORD kosong — nginx/ops.htpasswd tidak dibuat, dashboard ops (:8443/:8444) akan gagal start kalau dipakai begini."
+        return 1
+    fi
+    local hash
+    hash="$(printf '%s' "$pass" | openssl passwd -apr1 -stdin)"
+    printf '%s:%s\n' "$user" "$hash" > "$SCRIPT_DIR/nginx/ops.htpasswd"
+    log_ok "nginx/ops.htpasswd dibuat/diperbarui untuk user '$user'."
+}
+
 # Bootstrap TLS chicken-and-egg — identik dengan source repo.
 bootstrap_tls() {
     local live="$CERTBOT_DIR/conf/live/$DOMAIN"
@@ -333,6 +356,7 @@ action_deploy() {
         confirm "Lanjut deploy dengan image yang sudah ada secara lokal?" || return 1
     fi
     ensure_nginx_conf
+    ensure_ops_htpasswd
     if [[ "${BEHIND_WAF:-false}" == "true" ]]; then
         log_info "BEHIND_WAF=true — melewati bootstrap TLS/certbot."
     else

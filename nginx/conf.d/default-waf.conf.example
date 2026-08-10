@@ -79,3 +79,47 @@ server {
         include /etc/nginx/snippets/proxy-common-waf.conf;
     }
 }
+
+# ── :8443/:8444 — dashboard GlitchTip & Uptime Kuma (Fase 0 observability) ──
+# SAMA seperti mode default.conf.example, TAPI tanpa blok ssl_certificate
+# (WAF/reverse-proxy di depan yang pegang TLS publik, sama asumsi dgn blok
+# :80 di atas) — auth_basic tetap WAJIB, itu satu-satunya gerbang di sini.
+server {
+    listen 8443;
+    listen [::]:8443;
+    server_name __DOMAIN__;
+
+    # __REAL_IP_TRUST__
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+
+    auth_basic "Ops — akses terbatas";
+    auth_basic_user_file /etc/nginx/ops.htpasswd;
+
+    set $glitchtip_up http://glitchtip:8000;
+
+    location / {
+        proxy_pass $glitchtip_up$request_uri;
+        include /etc/nginx/snippets/proxy-common-waf.conf;
+    }
+}
+
+server {
+    listen 8444;
+    listen [::]:8444;
+    server_name __DOMAIN__;
+
+    # __REAL_IP_TRUST__
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+
+    auth_basic "Ops — akses terbatas";
+    auth_basic_user_file /etc/nginx/ops.htpasswd;
+
+    set $kuma_up http://uptime-kuma:3001;
+
+    location / {
+        proxy_pass $kuma_up$request_uri;
+        include /etc/nginx/snippets/proxy-common-waf.conf;
+    }
+}

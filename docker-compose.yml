@@ -41,10 +41,27 @@ services:
       MAPPROXY_SERVICE_URL: http://mapproxy/mapproxy/service
       MAPPROXY_MANIFEST_PATH: /app/mapproxy-config/layers-manifest.json
       API_BACKEND: http://harvester:4000
+      # Fase 0 observability (opsional) — kosong = SDK Sentry no-op total,
+      # app tetap jalan normal tanpanya. DSN didapat dari dashboard GlitchTip
+      # (https://$DOMAIN:8443) setelah bikin akun+project di sana, BUKAN
+      # dibuat otomatis compose ini.
+      SENTRY_DSN: ${SENTRY_DSN:-}
     volumes:
       - ./mapproxy:/app/mapproxy-config:ro
     deploy:
       replicas: ${APP_REPLICAS:-2}
+      # Batas resource (PER REPLIKA) — sinkron dgn repo source (inageo-mapviewer
+      # docker-compose.yml, commit "Pasang batas resource di semua service"),
+      # sebelumnya TIDAK ADA di installer ini sama sekali (drift, bukan
+      # disengaja). `reservations` = jaminan minimum, tetap didapat walau host
+      # lagi sibuk container lain.
+      resources:
+        limits:
+          cpus: "${APP_CPU_LIMIT:-2}"
+          memory: ${APP_MEMORY_LIMIT:-2G}
+        reservations:
+          cpus: "${APP_CPU_RESERVATION:-0.5}"
+          memory: ${APP_MEMORY_RESERVATION:-512M}
     depends_on:
       - redis
       - harvester
@@ -57,6 +74,11 @@ services:
   nginx:
     image: nginx:1.27-alpine
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
     ports:
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
@@ -79,6 +101,11 @@ services:
   certbot:
     image: certbot/certbot:v3.1.0
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
     volumes:
       - ./certbot/conf:/etc/letsencrypt
       - ./certbot/www:/var/www/certbot
@@ -96,6 +123,13 @@ services:
   mapproxy:
     image: ghcr.io/mapproxy/mapproxy/mapproxy:1.16.0-nginx
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # 4 core — cocok dgn UWSGI_PROCESSES=4 di bawah (satu core per
+          # proses), rendering tile bisa CPU-intensif.
+          cpus: "4"
+          memory: 2G
     environment:
       UWSGI_PROCESSES: 4
       UWSGI_THREADS: 8
@@ -108,6 +142,13 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # Sedikit di atas REDIS_MAXMEMORY (data Redis sendiri) — sisa utk
+          # overhead proses, BUKAN dobel dari REDIS_MAXMEMORY.
+          cpus: "1"
+          memory: 768M
     command: >
       redis-server --requirepass ${REDIS_PASSWORD}
                    --maxmemory ${REDIS_MAXMEMORY:-512mb}
@@ -124,14 +165,78 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-harvester}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-harvester}
+    # ── Total budget resource stack ini (semua limit di file ini, TIDAK
+    # termasuk `elasticsearch` — server dedicated terpisah, lihat catatan di
+    # sana): app(2×2C/2G) + nginx(1C/0.5G) + certbot(0.25C/0.125G) +
+    # mapproxy(4C/2G) + redis(1C/0.75G) + postgres(4C/8G) +
+    # postgres-backup(1C/0.5G) + redis-queue(1C/0.5G) + harvester(1×1C/1G) +
+    # glitchtip-postgres(1C/0.5G) + glitchtip-valkey(0.5C/0.25G) +
+    # glitchtip(1C/0.5G) + uptime-kuma(0.5C/0.25G) ≈ 18 core / 18,875GB —
+    # sesuaikan dgn kapasitas host produksi sesungguhnya sebelum menaikkan
+    # APP_REPLICAS/HARVESTER_REPLICAS jauh lebih tinggi dari default.
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 8G
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - cache
 
+  # Backup otomatis Postgres — SEBELUMNYA "di luar cakupan installer ini"
+  # (lihat riwayat .env.example), sekarang diporting dari repo source supaya
+  # installer benar-benar setara (parity), bukan cuma "cukup jalan". pg_dump
+  # harian format custom (-F c, bisa direstore parsial via pg_restore) +
+  # retensi otomatis — bukan solusi PITR/replika baca sungguhan, tapi jauh
+  # lebih baik daripada nol jaring pengaman thd state persisten pertama di
+  # stack ini (postgres_data, lihat catatan di service `postgres`).
+  postgres-backup:
+    image: postgis/postgis:16-3.4-alpine
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER:-harvester}
+      POSTGRES_DB: ${POSTGRES_DB:-harvester}
+      BACKUP_INTERVAL_SECONDS: ${POSTGRES_BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${POSTGRES_BACKUP_RETENTION_DAYS:-14}
+    entrypoint: >
+      /bin/sh -c '
+      trap exit TERM;
+      while :; do
+        ts=$$(date +%Y%m%d-%H%M%S);
+        echo "[postgres-backup] mulai dump $$ts";
+        if pg_dump -h postgres -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -F c -f "/backups/harvester-$$ts.dump"; then
+          echo "[postgres-backup] sukses: harvester-$$ts.dump";
+        else
+          echo "[postgres-backup] GAGAL dump $$ts" >&2;
+        fi;
+        find /backups -name "harvester-*.dump" -mtime "+$$BACKUP_RETENTION_DAYS" -delete;
+        sleep "$$BACKUP_INTERVAL_SECONDS" & wait $$!;
+      done'
+    volumes:
+      - postgres_backups:/backups
+    depends_on:
+      - postgres
+    networks:
+      - cache
+    # Tanpa `ports:` — sama isolasi dgn postgres sendiri. Restore manual:
+    # `docker compose exec postgres-backup pg_restore -h postgres -U
+    # $POSTGRES_USER -d $POSTGRES_DB --clean /backups/<file>.dump`.
+
   redis-queue:
     image: redis:7-alpine
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
     command: >
       redis-server --requirepass ${REDIS_QUEUE_PASSWORD}
                    --maxmemory ${REDIS_QUEUE_MAXMEMORY:-256mb}
@@ -145,6 +250,15 @@ services:
   harvester:
     image: ghcr.io/${GHCR_OWNER}/${GHCR_REPO}-harvester:${RELEASE_VERSION}
     restart: unless-stopped
+    deploy:
+      replicas: ${HARVESTER_REPLICAS:-1}
+      # Batas PER REPLIKA — lihat catatan sama di service `app`, sinkron dgn
+      # repo source. Nilai default konservatif (titik awal, bukan hasil
+      # pengukuran) — naikkan berdasar `docker stats` nyata, bukan tebakan.
+      resources:
+        limits:
+          cpus: "${HARVESTER_CPU_LIMIT:-1}"
+          memory: ${HARVESTER_MEMORY_LIMIT:-1G}
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-harvester}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-harvester}
       REDIS_QUEUE_URL: redis://:${REDIS_QUEUE_PASSWORD}@redis-queue:6379
@@ -155,6 +269,10 @@ services:
       # ke sini, semua lewat HTTP API harvester (lihat GET /search/* di source).
       ELASTICSEARCH_URL: http://elastic:${ELASTIC_PASSWORD}@elasticsearch:9200
       MAX_FEATURES_PER_LAYER: ${MAX_FEATURES_PER_LAYER:-50000}
+      # Sama seperti SENTRY_DSN di service `app` — opsional, harvester tetap
+      # jalan normal tanpanya. Var TERPISAH supaya error harvester & app bisa
+      # dipisah jadi 2 project GlitchTip beda kalau mau triase lebih jelas.
+      HARVESTER_SENTRY_DSN: ${HARVESTER_SENTRY_DSN:-}
     depends_on:
       - postgres
       - redis-queue
@@ -169,6 +287,19 @@ services:
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # Beda alasan dari batas resource service lain di file ini — mereka
+          # dibatasi supaya tidak "berebutan" host BERSAMA service lain (lihat
+          # catatan app/harvester); ES di sini jalan di SERVER SENDIRI (lihat
+          # komentar di atas), jadi tidak ada tetangga yang perlu dilindungi.
+          # Angka ini murni jaring pengaman batas atas (heap JVM 16GB + ruang
+          # off-heap Lucene secukupnya) — SESUAIKAN naik kalau server dedicated
+          # ini memang disiapkan lebih besar dari 64GB/32-core yang diasumsikan
+          # di komentar atas, jangan biarkan default ini jadi pembatas semu.
+          cpus: "${ELASTICSEARCH_CPU_LIMIT:-16}"
+          memory: ${ELASTICSEARCH_MEMORY_LIMIT:-32G}
     environment:
       discovery.type: single-node
       xpack.security.enabled: "true"
@@ -185,12 +316,106 @@ services:
     networks:
       - cache
 
+  # ── Fase 0 observability — diporting dari repo source, sebelumnya TIDAK
+  # ADA di installer ini sama sekali. GlitchTip: error-tracking self-hosted
+  # (MIT, kompatibel penuh SDK Sentry resmi @sentry/nextjs & @sentry/node).
+  # Postgres & Valkey (fork Redis) instance TERPISAH dari yang dipakai
+  # harvester/app — isolasi blast radius, sama filosofi redis vs redis-queue.
+  glitchtip-postgres:
+    image: postgres:18
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+    environment:
+      POSTGRES_USER: glitchtip
+      POSTGRES_PASSWORD: ${GLITCHTIP_DB_PASSWORD}
+      POSTGRES_DB: glitchtip
+    volumes:
+      - glitchtip_postgres_data:/var/lib/postgresql/data
+    networks:
+      - cache
+
+  glitchtip-valkey:
+    image: valkey/valkey:9
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    command: valkey-server --requirepass ${GLITCHTIP_VALKEY_PASSWORD} --save "" --appendonly no
+    networks:
+      - cache
+
+  glitchtip:
+    image: glitchtip/glitchtip:6
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # Cocok dgn dokumentasi resmi (~256-512MB utk skala ops internal,
+          # mode all_in_one: web+worker+beat satu proses).
+          cpus: "1"
+          memory: 512M
+    environment:
+      DATABASE_URL: postgres://glitchtip:${GLITCHTIP_DB_PASSWORD}@glitchtip-postgres:5432/glitchtip
+      VALKEY_URL: redis://:${GLITCHTIP_VALKEY_PASSWORD}@glitchtip-valkey:6379
+      SECRET_KEY: ${GLITCHTIP_SECRET_KEY}
+      # Port 8443 — lihat nginx/conf.d, dashboard GlitchTip HANYA lewat situ
+      # (basic-auth), TIDAK pernah lewat :443 publik utama.
+      GLITCHTIP_DOMAIN: https://${DOMAIN}:8443
+      DEFAULT_FROM_EMAIL: ${GLITCHTIP_FROM_EMAIL:-glitchtip@localhost}
+      # consolemail:// = email cuma ditulis ke log container, tidak benar-
+      # benar terkirim (default aman, dashboard tetap berfungsi tanpa SMTP).
+      EMAIL_URL: ${GLITCHTIP_EMAIL_URL:-consolemail://}
+      SERVER_ROLE: all_in_one
+    depends_on:
+      - glitchtip-postgres
+      - glitchtip-valkey
+    volumes:
+      - glitchtip_uploads:/code/uploads
+    networks:
+      - web
+      - cache
+    # Kaki "cache": dijangkau app/harvester utk kirim event error (DSN
+    # internal, tidak pernah lewat internet/nginx). Kaki "web": dijangkau
+    # nginx utk proxy dashboard di port 8443 (lihat nginx/conf.d). Tanpa
+    # `ports:` sendiri — nginx satu-satunya jalur ke dashboardnya.
+
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    volumes:
+      - uptime_kuma_data:/app/data
+    networks:
+      - web
+      - cache
+    # Kaki "cache": supaya bisa cek langsung http://harvester:4000/health,
+    # postgres:5432, redis-queue:6379, dll. Kaki "web": nginx menjangkau
+    # dashboardnya (port 8444, basic-auth, lihat nginx/conf.d).
+    # CATATAN: karena jalan di server yang sama dgn yang dipantau, ini TIDAK
+    # bisa mendeteksi "server ini mati total" — cuma failure level app/
+    # service selama host masih hidup.
+
   # One-shot: seed awal simpul_jaringan dari sample-csw.json yang SUDAH
   # dibake ke image harvester (bukan lagi bind-mount dari host — repo ini
   # tidak punya file itu). `docker compose run --rm harvester-seed`.
   harvester-seed:
     image: ghcr.io/${GHCR_OWNER}/${GHCR_REPO}-harvester:${RELEASE_VERSION}
     profiles: ["tools"]
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-harvester}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-harvester}
       REDIS_QUEUE_URL: redis://:${REDIS_QUEUE_PASSWORD}@redis-queue:6379
@@ -206,8 +431,12 @@ volumes:
   nginx_cache:
   mapproxy_cache:
   postgres_data:
+  postgres_backups:
   redis_queue_data:
   es_data:
+  glitchtip_postgres_data:
+  glitchtip_uploads:
+  uptime_kuma_data:
 
 networks:
   web:

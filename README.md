@@ -30,7 +30,7 @@ cd inageo-kjig-installer
 ./install.sh
 ```
 
-Wizard akan tanya dulu mode ambil image (pull GHCR vs bundle — lihat di atas; kredensial GHCR-nya sendiri **tidak** ditanya di sini, baru diminta interaktif oleh `deploy.sh` saat benar-benar dibutuhkan), lalu versi rilis, domain/TLS, jumlah replica, port, sumber data harvest & basemap kustom (opsional, runtime), dan men-generate semua password (Postgres/Redis/Redis-queue/API_ACCESS_TOKEN) otomatis.
+Wizard akan tanya dulu mode ambil image (pull GHCR vs bundle — lihat di atas; kredensial GHCR-nya sendiri **tidak** ditanya di sini, baru diminta interaktif oleh `deploy.sh` saat benar-benar dibutuhkan), lalu versi rilis, domain/TLS, jumlah replica, port, sumber data harvest & basemap kustom (opsional, runtime), backup Postgres & dashboard ops (GlitchTip/Uptime Kuma, lihat [Observability & backup](#observability--backup-fase-0)), dan men-generate semua password (Postgres/Redis/Redis-queue/API_ACCESS_TOKEN/GlitchTip/basic-auth ops) otomatis.
 
 Untuk server internal/dev tanpa domain publik (mis. IP `192.168.x.x`), jawab "ya" di pertanyaan "di belakang WAF, atau internal/dev tanpa TLS?" — nginx akan jalan HTTP polos tanpa certbot.
 
@@ -53,6 +53,14 @@ Semua lewat `.env`, tidak perlu edit `docker-compose.yml`:
 - `HTTP_PORT`/`HTTPS_PORT` — port publik nginx (default 80/443).
 - `POSTGRES_HOST_PORT`, `REDIS_HOST_PORT`, `REDIS_QUEUE_HOST_PORT`, `HARVESTER_HOST_PORT`, `MAPPROXY_HOST_PORT` — **opsional**, kosong (default) = service itu TIDAK bisa diakses dari luar Docker sama sekali (postur aman default, cocok produksi). Isi + set `COMPOSE_FILE=docker-compose.yml:docker-compose.ports.yml` (dilakukan otomatis oleh `install.sh` kalau kamu jawab "ya" saat ditanya) untuk expose ke host — berguna buat debug langsung (`psql`, `redis-cli`, curl API harvester) tanpa lewat proxy app. **Tidak disarankan untuk server produksi yang publik.**
 - `APP_DIRECT_PORT` — sama kegunaannya tapi **overlay-nya terpisah** (`docker-compose.app-port.yml`, bukan `docker-compose.ports.yml`), dan cuma bisa dipakai kalau `APP_REPLICAS=1` (banyak replica tidak bisa berbagi satu port host). Kalau diisi, `COMPOSE_FILE` butuh overlay ketiga: `docker-compose.yml:docker-compose.ports.yml:docker-compose.app-port.yml` (`install.sh` menambahkannya otomatis). File ini sengaja dipisah supaya nilai kosong benar-benar berarti "tidak ter-expose" — pernah ada bug di mana keduanya digabung satu file dengan port default, sehingga `APP_DIRECT_PORT` kosong tetap ter-publish ke port 3000 dan bikin 2 replica app rebutan port host yang sama (nginx pun ikut gagal start karena bergantung padanya).
+
+## Observability & backup (Fase 0)
+
+- **Backup Postgres otomatis** — service `postgres-backup` menjalankan `pg_dump -F c` (format custom, mendukung restore parsial) tiap `POSTGRES_BACKUP_INTERVAL_SECONDS` (default 86400 = 24 jam) ke volume `postgres_backups`, retensi `POSTGRES_BACKUP_RETENTION_DAYS` (default 14 hari) dihapus otomatis. Restore manual: `docker compose exec postgres-backup sh -c 'pg_restore -h postgres -U $POSTGRES_USER -d $POSTGRES_DB -c /backups/harvester-<timestamp>.dump'`.
+- **GlitchTip** (`https://<DOMAIN>:8443`) — error-tracking self-hosted, kompatibel SDK Sentry. `SENTRY_DSN`/`HARVESTER_SENTRY_DSN` di `.env` kosong secara default (SDK no-op, aplikasi tetap jalan normal) — isi setelah login pertama kali ke dashboard dan bikin akun+project lewat UI-nya sendiri.
+- **Uptime Kuma** (`https://<DOMAIN>:8444`) — uptime monitoring self-hosted, konfigurasi monitor dilakukan lewat UI setelah login pertama kali.
+- Kedua dashboard **hanya** bisa diakses lewat port terpisah (:8443/:8444), **tidak pernah** di path publik `:443`, dan dilindungi HTTP Basic Auth tambahan (`OPS_BASIC_AUTH_USER`/`OPS_BASIC_AUTH_PASSWORD` di `.env`, wajib diisi — `deploy.sh` men-generate `nginx/ops.htpasswd` dari dua nilai ini tiap deploy). Login basic-auth ini lapisan tambahan di depan, GlitchTip & Uptime Kuma tetap punya sistem login sendiri di baliknya.
+- `install.sh` men-generate semua password/secret terkait (`GLITCHTIP_DB_PASSWORD`, `GLITCHTIP_VALKEY_PASSWORD`, `GLITCHTIP_SECRET_KEY`, `OPS_BASIC_AUTH_PASSWORD`) otomatis saat instalasi pertama kali maupun saat upgrade dari `.env` versi lama (menu `patch_missing_env`).
 
 ## Gap yang diketahui: sinkronisasi config MapProxy
 

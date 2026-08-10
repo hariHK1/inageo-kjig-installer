@@ -438,6 +438,30 @@ run_wizard() {
     log_ok "REDIS_PASSWORD digenerate otomatis."
 
     echo ""
+    log_info "=== Fase 0 observability — GlitchTip (error-tracking) + Uptime Kuma (uptime) ==="
+    echo "Dashboard KEDUANYA hanya lewat nginx :8443/:8444 di belakang HTTP basic-auth, tidak pernah publik."
+    local SENTRY_DSN HARVESTER_SENTRY_DSN GLITCHTIP_DB_PASSWORD GLITCHTIP_VALKEY_PASSWORD GLITCHTIP_SECRET_KEY GLITCHTIP_EMAIL_URL GLITCHTIP_FROM_EMAIL OPS_BASIC_AUTH_USER OPS_BASIC_AUTH_PASSWORD
+    SENTRY_DSN=""
+    HARVESTER_SENTRY_DSN=""
+    echo "SENTRY_DSN dikosongkan dulu — baru bisa diisi setelah GlitchTip pertama kali dibuka dan bikin project (lihat README setelah deploy)."
+    GLITCHTIP_DB_PASSWORD="$(gen_password)"
+    GLITCHTIP_VALKEY_PASSWORD="$(gen_password)"
+    GLITCHTIP_SECRET_KEY="$(gen_password)"
+    log_ok "GLITCHTIP_DB_PASSWORD, GLITCHTIP_VALKEY_PASSWORD & GLITCHTIP_SECRET_KEY digenerate otomatis."
+    GLITCHTIP_EMAIL_URL=""
+    GLITCHTIP_FROM_EMAIL=""
+    echo "Email GlitchTip dikosongkan (consolemail:// — notifikasi cuma tercatat di log container, dashboard tetap berfungsi penuh). Isi manual di .env kalau perlu SMTP."
+    OPS_BASIC_AUTH_USER=$(ask "Username basic-auth dashboard ops (:8443/:8444)" "admin")
+    OPS_BASIC_AUTH_PASSWORD="$(gen_password)"
+    log_ok "OPS_BASIC_AUTH_PASSWORD digenerate otomatis untuk user '$OPS_BASIC_AUTH_USER'."
+
+    echo ""
+    log_info "=== Backup Postgres otomatis (pg_dump terjadwal) ==="
+    local POSTGRES_BACKUP_INTERVAL_SECONDS POSTGRES_BACKUP_RETENTION_DAYS
+    POSTGRES_BACKUP_INTERVAL_SECONDS=$(ask "Interval backup (detik)" "86400")
+    POSTGRES_BACKUP_RETENTION_DAYS=$(ask "Retensi backup (hari, lebih lama otomatis dihapus)" "14")
+
+    echo ""
     log_info "=== Ringkasan ==="
     echo "GHCR                  : $GHCR_OWNER/$GHCR_REPO (versi: $RELEASE_VERSION)"
     echo "Cara ambil image      : $([ "$PULL_MODE" = "true" ] && echo "pull langsung dari ghcr.io" || echo "load dari bundle tar.gz")"
@@ -462,6 +486,8 @@ run_wizard() {
     echo "  (kosong semua = pakai default publik RBI BIG/ArcGIS Online)"
     echo "PostGIS               : user=$POSTGRES_USER db=$POSTGRES_DB (password digenerate)"
     echo "MinIO                 : ${MINIO_ENDPOINT:-(tidak dipakai)}"
+    echo "Backup Postgres       : tiap ${POSTGRES_BACKUP_INTERVAL_SECONDS}s, retensi ${POSTGRES_BACKUP_RETENTION_DAYS} hari"
+    echo "Dashboard ops         : :8443 GlitchTip, :8444 Uptime Kuma (user=$OPS_BASIC_AUTH_USER, password digenerate)"
     echo ""
     if ! confirm "Simpan konfigurasi ini ke .env?"; then
         log_warn "Dibatalkan — .env TIDAK ditulis. Jalankan ./install.sh lagi untuk mengulang."
@@ -521,6 +547,8 @@ POSTGRES_DB=$POSTGRES_DB
 REDIS_QUEUE_PASSWORD=$REDIS_QUEUE_PASSWORD
 REDIS_QUEUE_MAXMEMORY=$REDIS_QUEUE_MAXMEMORY
 HARVEST_SCAN_INTERVAL_MS=$HARVEST_SCAN_INTERVAL_MS
+POSTGRES_BACKUP_INTERVAL_SECONDS=$POSTGRES_BACKUP_INTERVAL_SECONDS
+POSTGRES_BACKUP_RETENTION_DAYS=$POSTGRES_BACKUP_RETENTION_DAYS
 
 # === Elasticsearch (fitur "Cari Data" — katalog + isi-data) ===
 ELASTIC_PASSWORD=$ELASTIC_PASSWORD
@@ -554,6 +582,18 @@ COMPOSE_FILE=$COMPOSE_FILE_VAL
 # === Cache tile (Redis, disposable) ===
 REDIS_MAXMEMORY=$REDIS_MAXMEMORY
 REDIS_PASSWORD=$REDIS_PASSWORD
+
+# === Fase 0 observability — GlitchTip (error-tracking) + Uptime Kuma (uptime),
+# dashboard KEDUANYA hanya lewat nginx :8443/:8444 di belakang basic-auth ===
+SENTRY_DSN=$SENTRY_DSN
+HARVESTER_SENTRY_DSN=$HARVESTER_SENTRY_DSN
+GLITCHTIP_DB_PASSWORD=$GLITCHTIP_DB_PASSWORD
+GLITCHTIP_VALKEY_PASSWORD=$GLITCHTIP_VALKEY_PASSWORD
+GLITCHTIP_SECRET_KEY=$GLITCHTIP_SECRET_KEY
+GLITCHTIP_EMAIL_URL=$GLITCHTIP_EMAIL_URL
+GLITCHTIP_FROM_EMAIL=$GLITCHTIP_FROM_EMAIL
+OPS_BASIC_AUTH_USER=$OPS_BASIC_AUTH_USER
+OPS_BASIC_AUTH_PASSWORD=$OPS_BASIC_AUTH_PASSWORD
 EOF
     chmod 600 "$ENV_FILE"
     log_ok ".env dibuat (permission 600)."
