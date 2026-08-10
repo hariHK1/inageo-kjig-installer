@@ -722,8 +722,14 @@ patch_missing_env() {
 
     # Var wajib berpola rahasia — aman digenerate otomatis tanpa tanya,
     # SIAPA PUN nama var-nya (cocok pola), mirror ensure_secret() di deploy.sh.
+    # _KEY ditambahkan setelah GLITCHTIP_SECRET_KEY (berakhiran _SECRET_KEY,
+    # BUKAN _SECRET — lolos dari pola lama, sempat kepentok user harus isi
+    # manual padahal harusnya digenerate persis spt GLITCHTIP_DB_PASSWORD dkk
+    # di sebelahnya). Aman diperluas — satu-satunya var @wajib lain yang
+    # berakhiran _KEY adalah RECAPTCHA_SECRET_KEY, itu pun @opsional (ditangani
+    # blok terpisah di bawah, tidak pernah masuk REQUIRED_ENV_VARS/loop ini).
     for var in "${REQUIRED_ENV_VARS[@]}"; do
-        if [[ "$var" =~ (_PASSWORD|_TOKEN|_SECRET)$ ]] && ! env_var_present "$var"; then
+        if [[ "$var" =~ (_PASSWORD|_TOKEN|_SECRET|_KEY)$ ]] && ! env_var_present "$var"; then
             set_env_var "$var" "$(gen_password)"
             log_ok "$var digenerate otomatis."
             added+=("$var (digenerate otomatis)")

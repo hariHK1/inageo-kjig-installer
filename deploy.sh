@@ -155,6 +155,10 @@ check_env() {
     ensure_secret ELASTIC_PASSWORD "Elasticsearch tanpa password tidak akan bisa start (fitur \"Cari Data\")" || missing=1
     ensure_secret API_ACCESS_TOKEN "tanpa ini SEMUA endpoint harvester menolak permintaan (gagal-tertutup) — app tidak akan bisa baca data harvest sama sekali" || missing=1
     ensure_secret DASHBOARD_SESSION_SECRET "tanpa ini container app GAGAL START total (dashboard admin /admin wajib butuh secret ini)" || missing=1
+    ensure_secret GLITCHTIP_DB_PASSWORD "Postgres GlitchTip tanpa password tidak akan bisa start" || missing=1
+    ensure_secret GLITCHTIP_VALKEY_PASSWORD "Valkey GlitchTip tanpa password tidak akan bisa start" || missing=1
+    ensure_secret GLITCHTIP_SECRET_KEY "tanpa ini container GlitchTip GAGAL START total (Django wajib butuh secret key)" || missing=1
+    ensure_secret OPS_BASIC_AUTH_PASSWORD "tanpa ini nginx/ops.htpasswd tidak bisa dibuat, dashboard ops (:8443/:8444) akan gagal start" || missing=1
 
     if [[ $missing -eq 1 ]]; then
         return 1
