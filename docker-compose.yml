@@ -333,8 +333,16 @@ services:
       POSTGRES_USER: glitchtip
       POSTGRES_PASSWORD: ${GLITCHTIP_DB_PASSWORD}
       POSTGRES_DB: glitchtip
+    # Mount di /var/lib/postgresql (BUKAN /var/lib/postgresql/data lagi) —
+    # image resmi postgres MULAI MAYOR 18 pindah konvensi, data disimpan di
+    # subdirektori ber-nama-versi (mendukung pg_ctlcluster-style multi-versi)
+    # supaya "pg_upgrade --link" tidak terbentur batas mount point. Mount ke
+    # path lama TETAP "berhasil" start container tapi entrypoint menolak
+    # jalan (loop restart, pesan "there appears to be PostgreSQL data in
+    # /var/lib/postgresql/data (unused mount/volume)") — terverifikasi nyata
+    # di deployment. Referensi: docker-library/postgres#1259.
     volumes:
-      - glitchtip_postgres_data:/var/lib/postgresql/data
+      - glitchtip_postgres_data:/var/lib/postgresql
     networks:
       - cache
 
