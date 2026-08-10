@@ -522,10 +522,18 @@ action_seed_admin() {
     fi
     unset admin_password_confirm
 
-    log_info "Membuat/reset akun admin \"$admin_username\"..."
-    $COMPOSE_CMD run --rm -e INITIAL_ADMIN_USERNAME="$admin_username" -e INITIAL_ADMIN_PASSWORD="$admin_password" harvester node dist/scripts/seed-admin-user.js
+    local admin_role role_sel
+    echo "1) Superadmin (akses penuh)  2) Admin (dibatasi — tanpa Riwayat Login, Skema Infrastruktur, Log Perubahan, & link Ops)"
+    read -rp "Role akun [default 1]: " role_sel
+    case "$role_sel" in
+        2) admin_role="admin" ;;
+        *) admin_role="superadmin" ;;
+    esac
+
+    log_info "Membuat/reset akun admin \"$admin_username\" (role: $admin_role)..."
+    $COMPOSE_CMD run --rm -e INITIAL_ADMIN_USERNAME="$admin_username" -e INITIAL_ADMIN_PASSWORD="$admin_password" -e INITIAL_ADMIN_ROLE="$admin_role" harvester node dist/scripts/seed-admin-user.js
     local result=$?
-    unset admin_password admin_username
+    unset admin_password admin_username admin_role
     if [[ $result -eq 0 ]]; then
         log_ok "Akun admin siap dipakai login dashboard."
     else
