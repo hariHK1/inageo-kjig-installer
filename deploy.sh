@@ -452,6 +452,31 @@ action_scale() {
     $COMPOSE_CMD ps
 }
 
+# Sengaja terpisah dari action_scale (bukan digabung jadi satu fungsi generik)
+# — worker BullMQ harvester TIDAK di belakang nginx (beda dari app), jadi
+# tidak ada peringatan resolver DNS di sini, tapi ADA peringatan
+# HARVESTER_HOST_PORT yang analog dgn APP_DIRECT_PORT.
+action_scale_harvester() {
+    read -rp "Jumlah replica harvester [saat ini: ${HARVESTER_REPLICAS:-1}]: " n
+    if [[ ! "$n" =~ ^[0-9]+$ || "$n" -lt 1 ]]; then
+        log_error "Masukkan angka >= 1."
+        return 1
+    fi
+    if [[ "$n" -gt 1 && -n "${HARVESTER_HOST_PORT:-}" ]]; then
+        log_warn "HARVESTER_HOST_PORT masih diisi (${HARVESTER_HOST_PORT}) tapi replica > 1 — semua replica akan rebutan 1 port host yang sama, replica ke-2 dst GAGAL START. Kosongkan HARVESTER_HOST_PORT di .env dulu (lihat docker-compose.ports.yml), atau tetap di 1 replica."
+    fi
+    log_warn "Batas resource (HARVESTER_CPU_LIMIT/HARVESTER_MEMORY_LIMIT) berlaku PER REPLIKA — menaikkan replica × mengalikan juga total pemakaian CPU/RAM. Cek 'Total budget resource stack' di docker-compose.yml sebelum menaikkan jauh."
+    if grep -q '^HARVESTER_REPLICAS=' "$ENV_FILE" 2>/dev/null; then
+        sed -i "s/^HARVESTER_REPLICAS=.*/HARVESTER_REPLICAS=$n/" "$ENV_FILE"
+    else
+        echo "HARVESTER_REPLICAS=$n" >> "$ENV_FILE"
+    fi
+    log_info "Menerapkan HARVESTER_REPLICAS=$n..."
+    $COMPOSE_CMD up -d harvester
+    log_ok "Selesai — worker BullMQ aman multi-replica (lock Redis per-simpul, dedup jobId), tidak perlu langkah tambahan."
+    $COMPOSE_CMD ps
+}
+
 action_harvester_migrate() {
     log_info "Menjalankan migrasi database harvester (node-pg-migrate up)..."
     $COMPOSE_CMD run --rm harvester npx node-pg-migrate up \
@@ -559,6 +584,7 @@ main_menu() {
         echo "15) Seed awal simpul_jaringan"
         echo "16) Load image dari bundle (tar.gz Release, tanpa akses ghcr.io)"
         echo "17) Buat/reset akun admin dashboard"
+        echo "18) Scale harvester (ganti jumlah replica)"
         echo "0)  Keluar"
         read -rp "Pilih menu: " choice
         case "$choice" in
@@ -579,6 +605,7 @@ main_menu() {
             15) check_env && action_harvester_seed ;;
             16) action_load_bundle ;;
             17) check_env && action_seed_admin ;;
+            18) check_env && action_scale_harvester ;;
             0) exit 0 ;;
             *) log_warn "Pilihan tidak valid." ;;
         esac
