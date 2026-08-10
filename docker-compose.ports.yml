@@ -48,12 +48,13 @@ services:
     ports:
       - "${REDIS_QUEUE_HOST_PORT:-6380}:6379"
 
-  harvester:
-    networks:
-      - cache
-      - debug
-    ports:
-      - "${HARVESTER_HOST_PORT:-4000}:4000"
+  # harvester SENGAJA TIDAK di sini (lihat docker-compose.harvester-port.yml)
+  # — beda dari postgres/redis/mapproxy di atas (selalu 1 instance, aman pakai
+  # fallback "${VAR:-default}" biasa), harvester BISA multi-replica
+  # (HARVESTER_REPLICAS). Fallback default di sini akan tetap mem-publish ke
+  # port yang sama utk SEMUA replica walau var-nya dikosongkan (rebutan port,
+  # replica ke-2 dst gagal start — nyata terjadi di deployment), sama alasan
+  # persis kenapa `app` sudah lebih dulu dipisah ke docker-compose.app-port.yml.
 
   mapproxy:
     networks:

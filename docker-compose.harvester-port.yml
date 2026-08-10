@@ -1,0 +1,29 @@
+# Overlay OPSIONAL TERPISAH dari docker-compose.ports.yml — sama alasan
+# persis dengan docker-compose.app-port.yml (baca komentar di file itu utk
+# latar belakang lengkap): harvester BISA multi-replica (HARVESTER_REPLICAS),
+# jadi port host TUNGGAL tidak boleh punya fallback default — kalau
+# HARVESTER_HOST_PORT dikosongkan tapi tetap ter-publish ke port yang sama
+# (mis. "${HARVESTER_HOST_PORT:-4000}"), SEMUA replica rebutan 1 port host
+# yang sama dan replica ke-2 dst gagal start dengan error "port is already
+# allocated" (nyata terjadi di deployment, bukan teori — sebelumnya harvester
+# ikut nebeng di docker-compose.ports.yml bersama postgres/redis/mapproxy
+# yang selalu 1 instance, jadi tidak kena masalah ini).
+#
+# File ini HANYA dimasukkan ke COMPOSE_FILE oleh install.sh saat
+# HARVESTER_HOST_PORT betul-betul diisi. Kalau kamu edit HARVESTER_REPLICAS/
+# HARVESTER_HOST_PORT manual di .env setelahnya, pastikan tidak menyalakan
+# HARVESTER_HOST_PORT bersamaan dengan HARVESTER_REPLICAS>1 (deploy.sh menu
+# "Scale harvester" sudah memperingatkan otomatis kalau itu terjadi).
+#
+# `networks:` DITULIS ULANG LENGKAP (bukan cuma nambah `debug`) — SENGAJA,
+# harvester default-nya cuma di network `cache` (internal:true, lihat
+# docker-compose.yml) — tanpa network `debug` kedua ini, `ports:` di bawah
+# ter-declare tapi TIDAK PERNAH benar-benar published (sama gotcha yang
+# didokumentasikan di docker-compose.ports.yml).
+services:
+  harvester:
+    networks:
+      - cache
+      - debug
+    ports:
+      - "${HARVESTER_HOST_PORT}:4000"

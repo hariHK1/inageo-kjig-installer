@@ -327,8 +327,24 @@ run_wizard() {
         POSTGRES_HOST_PORT=$(ask "Port host untuk Postgres" "5432")
         REDIS_HOST_PORT=$(ask "Port host untuk Redis cache" "6379")
         REDIS_QUEUE_HOST_PORT=$(ask "Port host untuk Redis queue" "6380")
-        HARVESTER_HOST_PORT=$(ask "Port host untuk harvester API" "4000")
         MAPPROXY_HOST_PORT=$(ask "Port host untuk MapProxy" "8081")
+        # HARVESTER_HOST_PORT SENGAJA tanya default KOSONG (bukan "4000" spt
+        # port lain di atas) — beda dari postgres/redis/mapproxy yang selalu 1
+        # instance, harvester BISA multi-replica (HARVESTER_REPLICAS, diatur
+        # belakangan lewat deploy.sh menu "Scale harvester"). Kalau user
+        # asal Enter tanpa pikir (pola umum saat isi wizard), default "4000"
+        # akan lolos terisi lalu bikin replica ke-2 dst gagal start begitu
+        # discale — nyata terjadi di deployment. Kosong = aman & tetap bisa
+        # diisi manual kalau memang butuh akses langsung (baca peringatannya).
+        HARVESTER_HOST_PORT=$(ask "Port host untuk harvester API (KOSONGKAN kalau berencana >1 replica — lihat deploy.sh menu 'Scale harvester')" "")
+        # docker-compose.harvester-port.yml TERPISAH dari docker-compose.ports.yml
+        # (lihat komentar di file itu) — cuma dimasukkan ke COMPOSE_FILE kalau
+        # HARVESTER_HOST_PORT betul-betul diisi, sama pola persis APP_DIRECT_PORT
+        # di bawah, supaya tidak ada fallback default port yang diam-diam tetap
+        # ter-publish saat kosong (itu justru akar bug-nya).
+        if [[ -n "$HARVESTER_HOST_PORT" ]]; then
+            COMPOSE_FILE_VAL="$COMPOSE_FILE_VAL:docker-compose.harvester-port.yml"
+        fi
         if [[ "$APP_REPLICAS" -gt 1 ]]; then
             log_warn "APP_REPLICAS=$APP_REPLICAS (>1) — akses langsung ke app (bypass nginx) TIDAK bisa dipakai bersamaan dengan multi-replica. Dikosongkan."
         else
