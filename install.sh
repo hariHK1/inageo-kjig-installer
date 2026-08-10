@@ -360,6 +360,28 @@ run_wizard() {
     fi
 
     echo ""
+    log_info "=== DNS (opsional) ==="
+    echo "Kalau container (app/harvester) pernah gagal resolusi DNS intermiten"
+    echo "(error 'EAI_AGAIN' di log) padahal server ini sendiri terhubung internet"
+    echo "normal, itu biasanya bug jalur relay DNS bawaan Docker (127.0.0.11 ->"
+    echo "stub systemd-resolved), BUKAN DNS server jaringan kamu yang rusak. Isi"
+    echo "di bawah membuat container query LANGSUNG ke DNS server, bypass jalur"
+    echo "relay itu. KOSONGKAN kalau belum pernah mengalami masalah ini."
+    local DNS_PRIMARY="" DNS_FALLBACK=""
+    DNS_PRIMARY=$(ask "DNS server utama (kosongkan kalau tidak perlu)" "")
+    if [[ -n "$DNS_PRIMARY" ]]; then
+        DNS_FALLBACK=$(ask "DNS server fallback (dipakai kalau primer benar-benar down)" "1.1.1.1")
+        # docker-compose.dns.yml TERPISAH (lihat komentar di file itu) — cuma
+        # dimasukkan ke COMPOSE_FILE kalau DNS_PRIMARY betul-betul diisi, pola
+        # sama persis dgn docker-compose.harvester-port.yml/app-port.yml di atas.
+        if [[ -n "$COMPOSE_FILE_VAL" ]]; then
+            COMPOSE_FILE_VAL="$COMPOSE_FILE_VAL:docker-compose.dns.yml"
+        else
+            COMPOSE_FILE_VAL="docker-compose.yml:docker-compose.dns.yml"
+        fi
+    fi
+
+    echo ""
     log_info "=== Backend geoportal (server-side only) ==="
     local API_ACCESS_TOKEN APP_ORIGIN DASHBOARD_SESSION_SECRET
     API_ACCESS_TOKEN="$(gen_password)"
@@ -594,6 +616,10 @@ HARVESTER_HOST_PORT=$HARVESTER_HOST_PORT
 MAPPROXY_HOST_PORT=$MAPPROXY_HOST_PORT
 APP_DIRECT_PORT=$APP_DIRECT_PORT
 COMPOSE_FILE=$COMPOSE_FILE_VAL
+
+# === DNS (opsional, workaround jalur relay Docker — lihat docker-compose.dns.yml) ===
+DNS_PRIMARY=$DNS_PRIMARY
+DNS_FALLBACK=$DNS_FALLBACK
 
 # === Cache tile (Redis, disposable) ===
 REDIS_MAXMEMORY=$REDIS_MAXMEMORY

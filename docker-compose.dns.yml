@@ -1,0 +1,32 @@
+# Overlay OPSIONAL — beri container app & harvester daftar DNS server
+# LANGSUNG, bypass jalur relay DNS bawaan Docker (127.0.0.11 di dalam
+# container -> stub systemd-resolved 127.0.0.53 di host -> resolver
+# jaringan asli). Ditambahkan setelah ditemukan nyata di produksi
+# (2026-08-10): resolusi DNS lewat jalur relay itu gagal 100% (EAI_AGAIN,
+# baik untuk domain simpul jaringan maupun github.com), padahal query
+# LANGSUNG ke resolver jaringan yang SAMA (dari host, tanpa lewat Docker)
+# selalu sukses. Ini bug kategori yang sudah dikenal luas (relay Docker
+# <-> systemd-resolved kadang tidak reliable), BUKAN resolver DNS
+# jaringannya sendiri yang rusak.
+#
+# DNS_PRIMARY tetap server DNS jaringan kamu sendiri (BUKAN diganti DNS
+# publik) — sejumlah domain instansi (big.go.id, ina-sdi.or.id, lihat
+# src/app/apis/_lib/ssrf-guard.ts di repo aplikasi) SENGAJA resolve ke IP
+# privat lewat resolver internal jaringan pemerintah; DNS publik (mis.
+# 8.8.8.8) belum tentu punya jawaban yang sama untuk domain semacam itu.
+# DNS_FALLBACK murni jaring pengaman kalau primer benar-benar down (bukan
+# cuma jalur relay-nya yang bermasalah).
+#
+# File ini HANYA dimasukkan ke COMPOSE_FILE oleh install.sh saat
+# DNS_PRIMARY betul-betul diisi — kosong = perilaku default Docker
+# (127.0.0.11) tetap dipakai, tidak mengubah deployment lain yang tidak
+# mengalami masalah ini.
+services:
+  app:
+    dns:
+      - ${DNS_PRIMARY}
+      - ${DNS_FALLBACK:-1.1.1.1}
+  harvester:
+    dns:
+      - ${DNS_PRIMARY}
+      - ${DNS_FALLBACK:-1.1.1.1}
