@@ -1,0 +1,11 @@
+# Overlay OPSIONAL — publish port 443 nginx ke host. Dipisah dari base
+# docker-compose.yml SENGAJA (sama pola persis docker-compose.harvester-port.yml
+# dkk): kalau BEHIND_WAF=true, TLS ditangani WAF di depan & nginx config WAF-nya
+# sendiri (nginx/conf.d/default-waf.conf.example) memang tidak pernah `listen
+# 443` — publish port 443 ke host jadi percuma (menganggur, cuma nambah
+# permukaan). install.sh HANYA menambahkan overlay ini ke COMPOSE_FILE kalau
+# BEHIND_WAF=false (mode Let's Encrypt langsung, nginx sendiri yang urus TLS).
+services:
+  nginx:
+    ports:
+      - "${HTTPS_PORT:-443}:443"

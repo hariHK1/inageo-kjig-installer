@@ -63,10 +63,20 @@ Isi `DNS_PRIMARY` (dan opsional `DNS_FALLBACK`, default `1.1.1.1`) di `.env` unt
 ## Observability & backup (Fase 0)
 
 - **Backup Postgres otomatis** — service `postgres-backup` menjalankan `pg_dump -F c` (format custom, mendukung restore parsial) tiap `POSTGRES_BACKUP_INTERVAL_SECONDS` (default 86400 = 24 jam) ke volume `postgres_backups`, retensi `POSTGRES_BACKUP_RETENTION_DAYS` (default 14 hari) dihapus otomatis. Restore manual: `docker compose exec postgres-backup sh -c 'pg_restore -h postgres -U $POSTGRES_USER -d $POSTGRES_DB -c /backups/harvester-<timestamp>.dump'`.
-- **GlitchTip** (`https://<DOMAIN>:8443`) — error-tracking self-hosted, kompatibel SDK Sentry. `SENTRY_DSN`/`HARVESTER_SENTRY_DSN` di `.env` kosong secara default (SDK no-op, aplikasi tetap jalan normal) — isi setelah login pertama kali ke dashboard dan bikin akun+project lewat UI-nya sendiri.
-- **Uptime Kuma** (`https://<DOMAIN>:8444`) — uptime monitoring self-hosted, konfigurasi monitor dilakukan lewat UI setelah login pertama kali.
-- Kedua dashboard **hanya** bisa diakses lewat port terpisah (:8443/:8444), **tidak pernah** di path publik `:443`, dan dilindungi HTTP Basic Auth tambahan (`OPS_BASIC_AUTH_USER`/`OPS_BASIC_AUTH_PASSWORD` di `.env`, wajib diisi — `deploy.sh` men-generate `nginx/ops.htpasswd` dari dua nilai ini tiap deploy). Login basic-auth ini lapisan tambahan di depan, GlitchTip & Uptime Kuma tetap punya sistem login sendiri di baliknya.
-- `install.sh` men-generate semua password/secret terkait (`GLITCHTIP_DB_PASSWORD`, `GLITCHTIP_VALKEY_PASSWORD`, `GLITCHTIP_SECRET_KEY`, `OPS_BASIC_AUTH_PASSWORD`) otomatis saat instalasi pertama kali maupun saat upgrade dari `.env` versi lama (menu `patch_missing_env`).
+- **GlitchTip** (error-tracking, kompatibel SDK Sentry) & **Uptime Kuma** (uptime monitoring) — self-hosted, dashboard NATIVE keduanya **tidak diekspos publik sama sekali** (tidak ada port terpisah lagi, lihat § Lockdown port di bawah). Ringkasannya tampil di dashboard admin app: `https://<DOMAIN>/admin/kesehatan-sistem` (khusus akun role **Superadmin**, lihat repo source untuk sistem role) — halaman ini bicara ke GlitchTip/Uptime Kuma lewat API internal (harvester), bukan proxy nginx.
+- **Setup awal wajib manual** (token API belum bisa diisi wizard `install.sh` — baru ada setelah kedua tool ini pernah dibuka pertama kali): buka dashboard native masing-masing sementara lewat SSH port-forward (mis. `ssh -L 8000:localhost:8000 user@server` untuk GlitchTip, ganti port sesuai `docker compose port glitchtip 8000` / `docker compose port uptime-kuma 3001`) atau `docker compose exec`, bikin akun+organisasi (GlitchTip) atau akun admin (Uptime Kuma), lalu:
+  - GlitchTip → Profile → Auth Tokens → generate token (scope read-only cukup) → isi `GLITCHTIP_API_TOKEN` & `GLITCHTIP_ORG_SLUG` di `.env`.
+  - Uptime Kuma → Settings → API Keys → generate → isi `UPTIME_KUMA_METRICS_PASSWORD` (username boleh apa saja) di `.env`.
+  - `docker compose up -d harvester` (env baru saja, tidak perlu rebuild) — widget di `/admin/kesehatan-sistem` otomatis terisi begitu sampler pertama jalan (~1 menit).
+  - Sekalian bikin project GlitchTip untuk `SENTRY_DSN`/`HARVESTER_SENTRY_DSN` kalau mau error-tracking SDK aktif juga.
+- `install.sh` men-generate semua password/secret terkait (`GLITCHTIP_DB_PASSWORD`, `GLITCHTIP_VALKEY_PASSWORD`, `GLITCHTIP_SECRET_KEY`) otomatis saat instalasi pertama kali maupun saat upgrade dari `.env` versi lama (menu `patch_missing_env`).
+- **Skema Teknologi & Kesehatan Sistem dinamis** — resource limit/port di halaman `/admin/infrastruktur` dan status hidup-mati/CPU/RAM container di `/admin/kesehatan-sistem` ditarik LIVE dari `docker-compose.yml` sungguhan + service `docker-socket-proxy` (read-only, scope dibatasi ketat — cuma baca daftar+statistik container, TIDAK BISA start/stop/exec apa pun). `harvester` yang query keduanya, bukan mengakses `docker.sock` langsung.
+
+## Lockdown port (hanya :80 yang terbuka ke luar)
+
+Server ini didesain untuk berjalan **di belakang WAF/load-balancer** yang menangani HTTPS (`BEHIND_WAF=true`) — nginx di sini cukup dengar `:80` polos, WAF di depan yang teruskan trafik. Kalau `BEHIND_WAF=false` (mode Let's Encrypt langsung, nginx sendiri urus TLS), `install.sh` otomatis menambahkan overlay `docker-compose.https-port.yml` supaya `:443` ikut terbuka — TIDAK terjadi kalau `BEHIND_WAF=true`.
+
+Port lain (Postgres/Redis/MapProxy/harvester/Elasticsearch, lihat § Port kustom di atas) **default tertutup** dan cuma dibuka kalau operator eksplisit mengaktifkannya — cocok untuk debug lokal saja, jangan diaktifkan di produksi publik. Verifikasi dari luar server (`nmap`/`curl` dari device lain) bahwa cuma port yang memang dimaksudkan yang merespons.
 
 ## Gap yang diketahui: sinkronisasi config MapProxy
 

@@ -158,7 +158,6 @@ check_env() {
     ensure_secret GLITCHTIP_DB_PASSWORD "Postgres GlitchTip tanpa password tidak akan bisa start" || missing=1
     ensure_secret GLITCHTIP_VALKEY_PASSWORD "Valkey GlitchTip tanpa password tidak akan bisa start" || missing=1
     ensure_secret GLITCHTIP_SECRET_KEY "tanpa ini container GlitchTip GAGAL START total (Django wajib butuh secret key)" || missing=1
-    ensure_secret OPS_BASIC_AUTH_PASSWORD "tanpa ini nginx/ops.htpasswd tidak bisa dibuat, dashboard ops (:8443/:8444) akan gagal start" || missing=1
 
     if [[ $missing -eq 1 ]]; then
         return 1
@@ -219,27 +218,43 @@ ensure_nginx_conf() {
     fi
 }
 
-# nginx/ops.htpasswd (gitignored) — hash APR1-MD5 dari OPS_BASIC_AUTH_USER/
-# PASSWORD, format yang dimengerti modul auth_basic nginx (dipakai server
-# block :8443/:8444, dashboard GlitchTip/Uptime Kuma — lihat nginx/conf.d).
-# Identik dengan source repo. SELALU ditulis ulang tiap dipanggil (bukan cuma
-# kalau belum ada) — supaya ganti password di .env lalu redeploy langsung
-# kepakai, tanpa langkah manual terpisah. WAJIB dipanggil sebelum
+# .env.infra-display (gitignored) - subset TER-FILTER dari .env, di-mount
+# read-only ke harvester sbg /compose/.env (lihat docker-compose.yml) utk
+# Skema Teknologi/Kesehatan Sistem dinamis (composeParser.ts baca ini +
+# docker-compose.yml lain utk resolve ${VAR} di dalamnya). ALLOWLIST eksplisit
+# (bukan .env penuh) - .env ASLI berisi secret sungguhan (DASHBOARD_SESSION_
+# SECRET dkk, penandatangan cookie sesi admin APP Next.js) yang TIDAK BOLEH
+# bocor ke harvester (proses/permukaan-serang berbeda; kompromi di harvester
+# TIDAK BOLEH bisa memalsukan sesi admin app). Filter regex penolak
+# (_PASSWORD/_SECRET/_TOKEN/_KEY di akhir nama) sbg lapis kedua - jaga-jaga
+# ada var secret baru di masa depan yang lupa dikecualikan manual dari
+# allowlist di bawah. SELALU ditulis ulang tiap dipanggil (bukan cuma kalau
+# belum ada), sama pola dgn ensure_nginx_conf. WAJIB dipanggil sebelum
 # `docker compose up` (bind-mount ke file yang belum ada bikin Docker diam-
-# diam bikin DIREKTORI kosong), sama seperti ensure_nginx_conf. Password
-# dilewatkan via stdin (bukan argumen CLI) supaya tidak sempat terlihat di
-# `ps aux` proses lain di server yang sama.
-ensure_ops_htpasswd() {
-    local user="${OPS_BASIC_AUTH_USER:-admin}"
-    local pass="${OPS_BASIC_AUTH_PASSWORD:-}"
-    if [[ -z "$pass" ]]; then
-        log_warn "OPS_BASIC_AUTH_PASSWORD kosong — nginx/ops.htpasswd tidak dibuat, dashboard ops (:8443/:8444) akan gagal start kalau dipakai begini."
-        return 1
-    fi
-    local hash
-    hash="$(printf '%s' "$pass" | openssl passwd -apr1 -stdin)"
-    printf '%s:%s\n' "$user" "$hash" > "$SCRIPT_DIR/nginx/ops.htpasswd"
-    log_ok "nginx/ops.htpasswd dibuat/diperbarui untuk user '$user'."
+# diam bikin DIREKTORI kosong).
+ensure_infra_display_env() {
+    local allowlist=(
+        APP_CPU_LIMIT APP_MEMORY_LIMIT APP_CPU_RESERVATION APP_MEMORY_RESERVATION APP_REPLICAS
+        HARVESTER_CPU_LIMIT HARVESTER_MEMORY_LIMIT HARVESTER_REPLICAS
+        ELASTICSEARCH_CPU_LIMIT ELASTICSEARCH_MEMORY_LIMIT
+        HTTP_PORT HTTPS_PORT POSTGRES_HOST_PORT REDIS_HOST_PORT REDIS_QUEUE_HOST_PORT
+        HARVESTER_HOST_PORT MAPPROXY_HOST_PORT ELASTICSEARCH_HOST_PORT APP_DIRECT_PORT
+        DOMAIN BEHIND_WAF COMPOSE_FILE
+    )
+    local out="$SCRIPT_DIR/.env.infra-display"
+    : > "$out"
+    local name value
+    for name in "${allowlist[@]}"; do
+        # Lapis kedua - tolak APA PUN yang cocok pola nama var secret, walau
+        # sudah lolos allowlist di atas (jaga-jaga typo/kesalahan manual).
+        if [[ "$name" =~ (_PASSWORD|_SECRET|_TOKEN|_KEY)$ ]]; then
+            log_warn "ensure_infra_display_env: '$name' dilewati (cocok pola nama var secret, cek allowlist)."
+            continue
+        fi
+        value="${!name:-}"
+        [[ -n "$value" ]] && printf '%s=%s\n' "$name" "$value" >> "$out"
+    done
+    log_ok ".env.infra-display dibuat/diperbarui - dibaca harvester utk Skema Teknologi/Kesehatan Sistem dinamis."
 }
 
 # Bootstrap TLS chicken-and-egg — identik dengan source repo.
@@ -360,7 +375,7 @@ action_deploy() {
         confirm "Lanjut deploy dengan image yang sudah ada secara lokal?" || return 1
     fi
     ensure_nginx_conf
-    ensure_ops_htpasswd
+    ensure_infra_display_env
     if [[ "${BEHIND_WAF:-false}" == "true" ]]; then
         log_info "BEHIND_WAF=true — melewati bootstrap TLS/certbot."
     else

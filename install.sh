@@ -381,6 +381,21 @@ run_wizard() {
         fi
     fi
 
+    # docker-compose.https-port.yml — cuma dipublish port 443 kalau nginx DI
+    # SINI yang urus TLS-nya sendiri (BEHIND_WAF=false, mode Let's Encrypt/
+    # cert manual). Kalau BEHIND_WAF=true, WAF di depan yang urus HTTPS &
+    # nginx di sini cuma HTTP polos :80 — publish 443 jadi percuma (nginx
+    # config WAF-nya sendiri tidak pernah `listen 443`, lihat
+    # nginx/conf.d/default-waf.conf.example). Overlay TERPISAH sama pola
+    # persis dgn docker-compose.dns.yml dkk di atas.
+    if [[ "$BEHIND_WAF" == "false" ]]; then
+        if [[ -n "$COMPOSE_FILE_VAL" ]]; then
+            COMPOSE_FILE_VAL="$COMPOSE_FILE_VAL:docker-compose.https-port.yml"
+        else
+            COMPOSE_FILE_VAL="docker-compose.yml:docker-compose.https-port.yml"
+        fi
+    fi
+
     echo ""
     log_info "=== Backend geoportal (server-side only) ==="
     local API_ACCESS_TOKEN APP_ORIGIN DASHBOARD_SESSION_SECRET
@@ -477,11 +492,19 @@ run_wizard() {
 
     echo ""
     log_info "=== Fase 0 observability — GlitchTip (error-tracking) + Uptime Kuma (uptime) ==="
-    echo "Dashboard KEDUANYA hanya lewat nginx :8443/:8444 di belakang HTTP basic-auth, tidak pernah publik."
-    local SENTRY_DSN HARVESTER_SENTRY_DSN GLITCHTIP_DB_PASSWORD GLITCHTIP_VALKEY_PASSWORD GLITCHTIP_SECRET_KEY GLITCHTIP_EMAIL_URL GLITCHTIP_FROM_EMAIL OPS_BASIC_AUTH_USER OPS_BASIC_AUTH_PASSWORD
+    echo "Dashboard native KEDUANYA TIDAK diekspos publik sama sekali (tidak ada port terpisah lagi) —"
+    echo "ringkasannya tampil di /admin/kesehatan-sistem (dashboard admin app, khusus role Superadmin)."
+    local SENTRY_DSN HARVESTER_SENTRY_DSN GLITCHTIP_DB_PASSWORD GLITCHTIP_VALKEY_PASSWORD GLITCHTIP_SECRET_KEY GLITCHTIP_EMAIL_URL GLITCHTIP_FROM_EMAIL
+    local GLITCHTIP_API_TOKEN GLITCHTIP_ORG_SLUG UPTIME_KUMA_METRICS_USERNAME UPTIME_KUMA_METRICS_PASSWORD
     SENTRY_DSN=""
     HARVESTER_SENTRY_DSN=""
-    echo "SENTRY_DSN dikosongkan dulu — baru bisa diisi setelah GlitchTip pertama kali dibuka dan bikin project (lihat README setelah deploy)."
+    GLITCHTIP_API_TOKEN=""
+    GLITCHTIP_ORG_SLUG=""
+    UPTIME_KUMA_METRICS_USERNAME=""
+    UPTIME_KUMA_METRICS_PASSWORD=""
+    echo "SENTRY_DSN, GLITCHTIP_API_TOKEN/ORG_SLUG & UPTIME_KUMA_METRICS_USERNAME/PASSWORD dikosongkan dulu —"
+    echo "baru bisa diisi SETELAH GlitchTip/Uptime Kuma pertama kali dikonfigurasi lewat UI native masing-masing"
+    echo "(lihat README.md § post-deploy). Selama kosong, fitur terkait no-op (dashboard tampil \"belum dikonfigurasi\")."
     GLITCHTIP_DB_PASSWORD="$(gen_password)"
     GLITCHTIP_VALKEY_PASSWORD="$(gen_password)"
     GLITCHTIP_SECRET_KEY="$(gen_password)"
@@ -489,9 +512,6 @@ run_wizard() {
     GLITCHTIP_EMAIL_URL=""
     GLITCHTIP_FROM_EMAIL=""
     echo "Email GlitchTip dikosongkan (consolemail:// — notifikasi cuma tercatat di log container, dashboard tetap berfungsi penuh). Isi manual di .env kalau perlu SMTP."
-    OPS_BASIC_AUTH_USER=$(ask "Username basic-auth dashboard ops (:8443/:8444)" "admin")
-    OPS_BASIC_AUTH_PASSWORD="$(gen_password)"
-    log_ok "OPS_BASIC_AUTH_PASSWORD digenerate otomatis untuk user '$OPS_BASIC_AUTH_USER'."
 
     echo ""
     log_info "=== Backup Postgres otomatis (pg_dump terjadwal) ==="
@@ -525,7 +545,7 @@ run_wizard() {
     echo "PostGIS               : user=$POSTGRES_USER db=$POSTGRES_DB (password digenerate)"
     echo "MinIO                 : ${MINIO_ENDPOINT:-(tidak dipakai)}"
     echo "Backup Postgres       : tiap ${POSTGRES_BACKUP_INTERVAL_SECONDS}s, retensi ${POSTGRES_BACKUP_RETENTION_DAYS} hari"
-    echo "Dashboard ops         : :8443 GlitchTip, :8444 Uptime Kuma (user=$OPS_BASIC_AUTH_USER, password digenerate)"
+    echo "Dashboard ops         : GlitchTip/Uptime Kuma via /admin/kesehatan-sistem (isi token API manual pasca-deploy)"
     echo ""
     if ! confirm "Simpan konfigurasi ini ke .env?"; then
         log_warn "Dibatalkan — .env TIDAK ditulis. Jalankan ./install.sh lagi untuk mengulang."
@@ -625,8 +645,9 @@ DNS_FALLBACK=$DNS_FALLBACK
 REDIS_MAXMEMORY=$REDIS_MAXMEMORY
 REDIS_PASSWORD=$REDIS_PASSWORD
 
-# === Fase 0 observability — GlitchTip (error-tracking) + Uptime Kuma (uptime),
-# dashboard KEDUANYA hanya lewat nginx :8443/:8444 di belakang basic-auth ===
+# === Fase 0 observability — GlitchTip (error-tracking) + Uptime Kuma (uptime).
+# Dashboard native KEDUANYA TIDAK diekspos publik — ringkasan tampil di
+# /admin/kesehatan-sistem (dashboard admin app, khusus role Superadmin) ===
 SENTRY_DSN=$SENTRY_DSN
 HARVESTER_SENTRY_DSN=$HARVESTER_SENTRY_DSN
 GLITCHTIP_DB_PASSWORD=$GLITCHTIP_DB_PASSWORD
@@ -634,8 +655,14 @@ GLITCHTIP_VALKEY_PASSWORD=$GLITCHTIP_VALKEY_PASSWORD
 GLITCHTIP_SECRET_KEY=$GLITCHTIP_SECRET_KEY
 GLITCHTIP_EMAIL_URL=$GLITCHTIP_EMAIL_URL
 GLITCHTIP_FROM_EMAIL=$GLITCHTIP_FROM_EMAIL
-OPS_BASIC_AUTH_USER=$OPS_BASIC_AUTH_USER
-OPS_BASIC_AUTH_PASSWORD=$OPS_BASIC_AUTH_PASSWORD
+# Diisi MANUAL pasca-deploy — token/API key baru ADA setelah GlitchTip/
+# Uptime Kuma pertama kali dikonfigurasi lewat UI native masing-masing
+# (GlitchTip: Profile -> Auth Tokens; Kuma: Settings -> API Keys), tidak
+# bisa diisi wizard ini. Kosong = fitur terkait no-op di /admin/kesehatan-sistem.
+GLITCHTIP_API_TOKEN=$GLITCHTIP_API_TOKEN
+GLITCHTIP_ORG_SLUG=$GLITCHTIP_ORG_SLUG
+UPTIME_KUMA_METRICS_USERNAME=$UPTIME_KUMA_METRICS_USERNAME
+UPTIME_KUMA_METRICS_PASSWORD=$UPTIME_KUMA_METRICS_PASSWORD
 EOF
     chmod 600 "$ENV_FILE"
     log_ok ".env dibuat (permission 600)."

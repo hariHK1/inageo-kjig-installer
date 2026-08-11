@@ -79,9 +79,14 @@ services:
         limits:
           cpus: "1"
           memory: 512M
+    # Cuma 80 di base file — 443 SENGAJA dipindah ke overlay opsional
+    # docker-compose.https-port.yml (install.sh menambahkannya otomatis
+    # KECUALI BEHIND_WAF=true, di mana TLS ditangani WAF di depan & nginx di
+    # sini cukup HTTP polos). Sebelumnya 443 SELALU ter-publish walau mode
+    # WAF (nginx config WAF-nya sendiri tidak pernah listen 443 sama sekali)
+    # — gap nyata, bukan disengaja.
     ports:
       - "${HTTP_PORT:-80}:80"
-      - "${HTTPS_PORT:-443}:443"
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./nginx/snippets:/etc/nginx/snippets:ro
@@ -247,6 +252,54 @@ services:
     networks:
       - cache
 
+  # Satu-satunya yang mount docker.sock ASLI — read-only, scope dibatasi
+  # ketat (cuma daftar+stats container, TANPA exec/start/stop/network-modify/
+  # image/volume/dst). harvester bicara ke SINI (via DOCKER_PROXY_URL),
+  # TIDAK PERNAH ke docker.sock langsung — dasar Skema Teknologi/Kesehatan
+  # Sistem live (lihat composeParser.ts & containerHealthSampler.ts di repo
+  # source). Verifikasi ulang nama flag env ini terhadap README image versi
+  # yang benar-benar dipakai kalau upgrade image — API proxy bisa berubah
+  # antar versi mayor.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+    environment:
+      CONTAINERS: 1
+      POST: 0
+      IMAGES: 0
+      INFO: 0
+      NETWORKS: 0
+      VOLUMES: 0
+      EXEC: 0
+      SERVICES: 0
+      SWARM: 0
+      SYSTEM: 0
+      TASKS: 0
+      BUILD: 0
+      COMMIT: 0
+      CONFIGS: 0
+      DISTRIBUTION: 0
+      PLUGINS: 0
+      SECRETS: 0
+      ALLOW_START: 0
+      ALLOW_STOP: 0
+      ALLOW_RESTARTS: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # TANPA `ports:` sama sekali (otomatis tidak bisa ter-publish ke host,
+    # gotcha yang sama didokumentasikan di docker-compose.ports.yml) + network
+    # KHUSUS `docker-proxy-net` (bukan `cache`) - README resmi image ini minta
+    # network SEMPIT cuma proxy+konsumen, bukan network luas yang dipakai
+    # banyak service lain. internal:true - tidak ada rute ke internet sama
+    # sekali, dari zona mana pun.
+    networks:
+      - docker-proxy-net
+
   harvester:
     image: ghcr.io/${GHCR_OWNER}/${GHCR_REPO}-harvester:${RELEASE_VERSION}
     restart: unless-stopped
@@ -273,12 +326,48 @@ services:
       # jalan normal tanpanya. Var TERPISAH supaya error harvester & app bisa
       # dipisah jadi 2 project GlitchTip beda kalau mau triase lebih jelas.
       HARVESTER_SENTRY_DSN: ${HARVESTER_SENTRY_DSN:-}
+      # Skema Teknologi/Kesehatan Sistem dinamis (lihat composeParser.ts &
+      # containerHealthSampler.ts) — SEMUA opsional dari sisi kode (no-op
+      # kalau kosong), tapi TIDAK kosong di sini krn bind-mount di bawah
+      # SELALU disiapkan deploy.sh. Path internal TETAP (bukan dari .env) —
+      # cuma titik mount container ini, bukan sesuatu yang perlu operator atur.
+      COMPOSE_DIR: /compose
+      COMPOSE_FILE_LIST: ${COMPOSE_FILE:-}
+      COMPOSE_ENV_PATH: /compose/.env
+      DOCKER_PROXY_URL: http://docker-socket-proxy:2375
+      # Diisi MANUAL pasca-deploy (lihat README.md § post-deploy) — token/API
+      # key baru ADA setelah GlitchTip/Uptime Kuma pertama kali dikonfigurasi
+      # lewat UI native masing-masing, tidak bisa diisi wizard install.sh.
+      GLITCHTIP_INTERNAL_URL: http://glitchtip:8000
+      GLITCHTIP_API_TOKEN: ${GLITCHTIP_API_TOKEN:-}
+      GLITCHTIP_ORG_SLUG: ${GLITCHTIP_ORG_SLUG:-}
+      UPTIME_KUMA_METRICS_URL: http://uptime-kuma:3001/metrics
+      UPTIME_KUMA_METRICS_USERNAME: ${UPTIME_KUMA_METRICS_USERNAME:-}
+      UPTIME_KUMA_METRICS_PASSWORD: ${UPTIME_KUMA_METRICS_PASSWORD:-}
+    volumes:
+      # Read-only, docker-compose.yml BUKAN secret (isinya cuma ${VAR}
+      # placeholder) — aman di-mount penuh. .env ASLI (berisi
+      # DASHBOARD_SESSION_SECRET dkk, secret app Next.js) SENGAJA TIDAK
+      # di-mount ke sini — .env.infra-display (dibuat deploy.sh
+      # ensure_infra_display_env, allowlist var non-secret) yang dipasang
+      # sbg /compose/.env. Semua file overlay di-mount TERLEPAS aktif/tidak
+      # di COMPOSE_FILE (murah, bukan secret) — supaya composeParser.ts bisa
+      # baca file mana pun yang namanya muncul di COMPOSE_FILE_LIST.
+      - ./docker-compose.yml:/compose/docker-compose.yml:ro
+      - ./docker-compose.ports.yml:/compose/docker-compose.ports.yml:ro
+      - ./docker-compose.app-port.yml:/compose/docker-compose.app-port.yml:ro
+      - ./docker-compose.harvester-port.yml:/compose/docker-compose.harvester-port.yml:ro
+      - ./docker-compose.dns.yml:/compose/docker-compose.dns.yml:ro
+      - ./docker-compose.https-port.yml:/compose/docker-compose.https-port.yml:ro
+      - ./.env.infra-display:/compose/.env:ro
     depends_on:
       - postgres
       - redis-queue
       - elasticsearch
+      - docker-socket-proxy
     networks:
       - cache
+      - docker-proxy-net
 
   # Mesin pencari fitur "Cari Data" (katalog + isi-data lintas simpul) — server
   # dedicated resource tinggi (64GB RAM/32-core/512GB) disiapkan khusus untuk
@@ -372,9 +461,10 @@ services:
       DATABASE_URL: postgres://glitchtip:${GLITCHTIP_DB_PASSWORD}@glitchtip-postgres:5432/glitchtip
       VALKEY_URL: redis://:${GLITCHTIP_VALKEY_PASSWORD}@glitchtip-valkey:6379
       SECRET_KEY: ${GLITCHTIP_SECRET_KEY}
-      # Port 8443 — lihat nginx/conf.d, dashboard GlitchTip HANYA lewat situ
-      # (basic-auth), TIDAK pernah lewat :443 publik utama.
-      GLITCHTIP_DOMAIN: https://${DOMAIN}:8443
+      # Dashboard native GlitchTip TIDAK LAGI diekspos lewat nginx (sebelumnya
+      # :8443, sudah dihapus, lihat nginx/conf.d & README.md). Ringkasan
+      # error tetap bisa dilihat via /admin/kesehatan-sistem (repo source).
+      GLITCHTIP_DOMAIN: https://${DOMAIN}
       DEFAULT_FROM_EMAIL: ${GLITCHTIP_FROM_EMAIL:-glitchtip@localhost}
       # consolemail:// = email cuma ditulis ke log container, tidak benar-
       # benar terkirim (default aman, dashboard tetap berfungsi tanpa SMTP).
@@ -385,13 +475,12 @@ services:
       - glitchtip-valkey
     volumes:
       - glitchtip_uploads:/code/uploads
+    # Cuma "cache" - dijangkau app/harvester kirim event error (DSN internal)
+    # DAN harvester baca ringkasan lewat REST API (GLITCHTIP_API_TOKEN).
+    # TIDAK LAGI di network "web" - dashboard native-nya sudah tidak
+    # diekspos nginx sama sekali.
     networks:
-      - web
       - cache
-    # Kaki "cache": dijangkau app/harvester utk kirim event error (DSN
-    # internal, tidak pernah lewat internet/nginx). Kaki "web": dijangkau
-    # nginx utk proxy dashboard di port 8443 (lihat nginx/conf.d). Tanpa
-    # `ports:` sendiri — nginx satu-satunya jalur ke dashboardnya.
 
   uptime-kuma:
     image: louislam/uptime-kuma:1
@@ -406,9 +495,17 @@ services:
     networks:
       - web
       - cache
-    # Kaki "cache": supaya bisa cek langsung http://harvester:4000/health,
-    # postgres:5432, redis-queue:6379, dll. Kaki "web": nginx menjangkau
-    # dashboardnya (port 8444, basic-auth, lihat nginx/conf.d).
+    # "web" DIPERTAHANKAN (BUKAN cuma sisa dari sebelumnya) - bukan lagi utk
+    # dijangkau nginx (dashboard native tidak diekspos lagi), TAPI Uptime
+    # Kuma sendiri butuh rute internet KELUAR (`web` non-internal punya NAT
+    # outbound via host, `cache` internal:true tidak) supaya monitor yang
+    # dikonfigurasi memantau URL PUBLIK (opsional, disetel manual lewat
+    # UI-nya) tetap bisa jalan - mencabutnya akan mematahkan fitur itu tanpa
+    # manfaat keamanan tambahan (exposure sebenarnya sudah ditutup total
+    # lewat nginx, bukan lewat keanggotaan network). "cache" - supaya bisa
+    # cek langsung http://harvester:4000/health, postgres:5432, redis-
+    # queue:6379, dll, DAN harvester baca /metrics-nya
+    # (UPTIME_KUMA_METRICS_PASSWORD, lihat README.md § post-deploy).
     # CATATAN: karena jalan di server yang sama dgn yang dipantau, ini TIDAK
     # bisa mendeteksi "server ini mati total" — cuma failure level app/
     # service selama host masih hidup.
@@ -463,3 +560,11 @@ networks:
   # nyata di deployment, bukan teori).
   debug:
     driver: bridge
+  # Khusus docker-socket-proxy <-> harvester SAJA - README resmi image ini
+  # eksplisit merekomendasikan "only to a Docker network where only reside
+  # the proxy itself and the service that uses it", BUKAN network `cache`
+  # yang dipakai banyak service lain (postgres/redis/elasticsearch/glitchtip
+  # dst). internal:true - sama isolasi dgn `cache`, tanpa rute ke internet.
+  docker-proxy-net:
+    driver: bridge
+    internal: true
