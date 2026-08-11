@@ -21,12 +21,28 @@
 # DNS_PRIMARY betul-betul diisi — kosong = perilaku default Docker
 # (127.0.0.11) tetap dipakai, tidak mengubah deployment lain yang tidak
 # mengalami masalah ini.
+#
+# `environment:` di bawah SELAIN `dns:` — ditambahkan setelah ditemukan
+# nyata bahwa `dns:` saja TIDAK CUKUP: proxy DNS bawaan Docker (127.0.0.11)
+# tetap jadi resolver DI DALAM container apa pun isi `dns:` (compose cuma
+# atur upstream-nya, container tidak pernah benar-benar lepas dari proxy itu
+# lewat config compose saja), dan proxy itu sendiri terbukti bisa kehilangan
+# paket di bawah beban query DNS bersamaan tinggi (persis beban harvest).
+# Kode aplikasi (src/app/apis/_lib/ssrf-guard.ts) baca DNS_PRIMARY/
+# DNS_FALLBACK dari env ini utk query DNS LANGSUNG dari proses Node
+# (dns.Resolver.setServers()), benar-benar melewati proxy 127.0.0.11.
 services:
   app:
     dns:
       - ${DNS_PRIMARY}
       - ${DNS_FALLBACK:-1.1.1.1}
+    environment:
+      DNS_PRIMARY: ${DNS_PRIMARY}
+      DNS_FALLBACK: ${DNS_FALLBACK:-1.1.1.1}
   harvester:
     dns:
       - ${DNS_PRIMARY}
       - ${DNS_FALLBACK:-1.1.1.1}
+    environment:
+      DNS_PRIMARY: ${DNS_PRIMARY}
+      DNS_FALLBACK: ${DNS_FALLBACK:-1.1.1.1}
