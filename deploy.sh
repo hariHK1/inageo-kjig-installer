@@ -384,6 +384,13 @@ action_deploy() {
     log_info "Deploying (up -d)..."
     $COMPOSE_CMD up -d
     $COMPOSE_CMD ps
+    # postgres tidak punya healthcheck (lihat docker-compose.yml) — jeda
+    # singkat sebelum migrasi supaya tidak race dgn startup-nya. Kalau
+    # tetap gagal (postgres lambat start di server ini), bukan fatal utk
+    # deploy — app/harvester sudah naik, operator tinggal jalankan menu 14
+    # manual setelah postgres benar-benar siap.
+    sleep 3
+    action_harvester_migrate || log_warn "Migrasi otomatis gagal — kemungkinan postgres belum siap. Jalankan manual lewat menu 14 setelah memastikan service 'postgres' sehat."
 }
 
 # Ganti versi (upgrade ATAU rollback — tinggal isi nomor lebih baru/lama).
@@ -412,6 +419,7 @@ action_set_version() {
     fi
     $COMPOSE_CMD up -d --no-deps --force-recreate app harvester
     $COMPOSE_CMD ps
+    action_harvester_migrate || log_warn "Migrasi otomatis gagal — jalankan manual lewat menu 14."
     log_ok "Selesai — app & harvester sekarang di versi $new_version."
 }
 
@@ -579,6 +587,24 @@ action_reload_nginx() {
     $COMPOSE_CMD exec nginx nginx -s reload && log_ok "Nginx reload."
 }
 
+# Cek cepat port apa saja yang benar-benar listening di host ini. Ini CUMA
+# self-check LOKAL (dari dalam server) — bukan pengganti verifikasi dari
+# LUAR (nmap/curl dari device lain), karena firewall/security-group cloud
+# di depan server tidak ikut teruji dari sini.
+action_check_exposed_ports() {
+    log_info "Port yang listening di host ini:"
+    if command -v ss >/dev/null 2>&1; then
+        ss -tlnp 2>/dev/null || ss -tln
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -tlnp 2>/dev/null || netstat -tln
+    else
+        log_warn "Tidak ada 'ss'/'netstat' di sistem ini — tidak bisa cek dari sini."
+        return 1
+    fi
+    echo ""
+    log_warn "Ini cuma cek LOKAL. Verifikasi FINAL tetap wajib dari LUAR server (device lain, mis. 'nmap <domain>' atau 'curl https://<domain>:8443' yang seharusnya gagal/timeout) — supaya firewall/security-group cloud di depan server ikut teruji, bukan cuma binding Docker di host ini."
+}
+
 # ── Menu ──────────────────────────────────────────────────────────────────
 print_banner() {
     echo ""
@@ -591,8 +617,8 @@ main_menu() {
     while true; do
         print_banner
         echo "1)  Pull image terbaru sesuai RELEASE_VERSION (butuh akses ghcr.io)"
-        echo "2)  Deploy (pull/bundle + up -d)"
-        echo "3)  Ganti versi (upgrade / rollback)"
+        echo "2)  Deploy (pull/bundle + up -d + migrasi otomatis)"
+        echo "3)  Ganti versi (upgrade / rollback, + migrasi otomatis)"
         echo "4)  Stop (down)"
         echo "5)  Restart"
         echo "6)  Lihat log (follow)"
@@ -603,11 +629,12 @@ main_menu() {
         echo "11) Perbarui sertifikat TLS (manual)"
         echo "12) Uji config nginx (nginx -t)"
         echo "13) Reload nginx"
-        echo "14) Migrasi database harvester (node-pg-migrate up)"
+        echo "14) Migrasi database harvester (manual/fallback — sudah otomatis di menu 2/3)"
         echo "15) Seed awal simpul_jaringan"
         echo "16) Load image dari bundle (tar.gz Release, tanpa akses ghcr.io)"
         echo "17) Buat/reset akun admin dashboard"
         echo "18) Scale harvester (ganti jumlah replica)"
+        echo "19) Cek port yang listening di host (self-check lokal)"
         echo "0)  Keluar"
         read -rp "Pilih menu: " choice
         case "$choice" in
@@ -629,6 +656,7 @@ main_menu() {
             16) action_load_bundle ;;
             17) check_env && action_seed_admin ;;
             18) check_env && action_scale_harvester ;;
+            19) action_check_exposed_ports ;;
             0) exit 0 ;;
             *) log_warn "Pilihan tidak valid." ;;
         esac

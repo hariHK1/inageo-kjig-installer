@@ -37,14 +37,15 @@ Untuk server internal/dev tanpa domain publik (mis. IP `192.168.x.x`), jawab "ya
 Setelah wizard selesai, lanjut ke `./deploy.sh`:
 
 ```
-2) Deploy (pull + up -d)      # pertama kali
-14) Migrasi database harvester # sekali, setelah postgres jalan
+2) Deploy (pull + up -d)      # pertama kali — migrasi DB otomatis jalan setelahnya
 15) Seed awal simpul_jaringan  # sekali, isi awal daftar simpul
 ```
 
+Menu 14 ("Migrasi database harvester") tetap ada sebagai fallback manual — dipakai kalau migrasi otomatis gagal (mis. postgres belum siap benar saat instalasi pertama, lihat log warning-nya).
+
 ## Upgrade / rollback
 
-`./deploy.sh` → **3) Ganti versi** — isi versi baru (upgrade) atau versi lama (rollback). Cuma container `app` dan `harvester` yang di-recreate; `postgres`/`redis`/`redis-queue`/`nginx`/`certbot` tidak disentuh (data & TLS aman).
+`./deploy.sh` → **3) Ganti versi** — isi versi baru (upgrade) atau versi lama (rollback). Cuma container `app` dan `harvester` yang di-recreate; `postgres`/`redis`/`redis-queue`/`nginx`/`certbot` tidak disentuh (data & TLS aman). Migrasi database harvester ikut jalan otomatis setelahnya (idempotent — aman dijalankan walau tidak ada migration baru).
 
 ## Port kustom
 
@@ -76,7 +77,9 @@ Isi `DNS_PRIMARY` (dan opsional `DNS_FALLBACK`, default `1.1.1.1`) di `.env` unt
 
 Server ini didesain untuk berjalan **di belakang WAF/load-balancer** yang menangani HTTPS (`BEHIND_WAF=true`) — nginx di sini cukup dengar `:80` polos, WAF di depan yang teruskan trafik. Kalau `BEHIND_WAF=false` (mode Let's Encrypt langsung, nginx sendiri urus TLS), `install.sh` otomatis menambahkan overlay `docker-compose.https-port.yml` supaya `:443` ikut terbuka — TIDAK terjadi kalau `BEHIND_WAF=true`.
 
-Port lain (Postgres/Redis/MapProxy/harvester/Elasticsearch, lihat § Port kustom di atas) **default tertutup** dan cuma dibuka kalau operator eksplisit mengaktifkannya — cocok untuk debug lokal saja, jangan diaktifkan di produksi publik. Verifikasi dari luar server (`nmap`/`curl` dari device lain) bahwa cuma port yang memang dimaksudkan yang merespons.
+Port lain (Postgres/Redis/MapProxy/harvester/Elasticsearch, lihat § Port kustom di atas) **default tertutup** dan cuma dibuka kalau operator eksplisit mengaktifkannya — cocok untuk debug lokal saja, jangan diaktifkan di produksi publik.
+
+`./deploy.sh` → **19) Cek port yang listening di host** memberi cek cepat LOKAL (`ss`/`netstat`) begitu deploy selesai. Ini bukan pengganti verifikasi sesungguhnya — tetap wajib cek dari **LUAR** server (`nmap`/`curl` dari device lain) supaya firewall/security-group cloud di depan server ikut teruji, bukan cuma binding Docker di host ini.
 
 ## Gap yang diketahui: sinkronisasi config MapProxy
 
