@@ -20,10 +20,19 @@
 # docker-compose.yml) — tanpa network `debug` kedua ini, `ports:` di bawah
 # ter-declare tapi TIDAK PERNAH benar-benar published (sama gotcha yang
 # didokumentasikan di docker-compose.ports.yml).
+#
+# Bind eksplisit ke 127.0.0.1 (BUKAN cuma "${HARVESTER_HOST_PORT}:4000" —
+# itu publish ke SEMUA interface/0.0.0.0, langsung ke publik kalau firewall
+# cloud di depan server tidak kebetulan menutupnya). Loopback-only berarti
+# port ini SATU-SATUNYA cara masuk lewat SSH port-forward dari mesin yang
+# sudah punya akses SSH ke server (mis. `ssh -L 4000:127.0.0.1:4000 user@server`
+# utk nyambungin UI dev lokal ke harvester produksi) — tidak pernah
+# reachable dari jaringan luar sama sekali, bahkan kalau operator lupa
+# menutup firewall.
 services:
   harvester:
     networks:
       - cache
       - debug
     ports:
-      - "${HARVESTER_HOST_PORT}:4000"
+      - "127.0.0.1:${HARVESTER_HOST_PORT}:4000"
