@@ -365,7 +365,20 @@ services:
       - redis-queue
       - elasticsearch
       - docker-socket-proxy
+    # "web" WAJIB ADA DI SINI — network "cache" & "docker-proxy-net"
+    # internal:true (tanpa rule NAT ke internet), sementara satu-satunya
+    # tugas harvester justru fetch CSW/WMS dari server SIMPUL DI INTERNET.
+    # Tanpa "web", harvester TIDAK PERNAH punya rute keluar sama sekali —
+    # ditemukan sbg root cause nyata kegagalan EAI_AGAIN/ECONNREFUSED yang
+    # dikira soal DNS relay Docker (fix retry+custom-resolver sebelumnya
+    # cuma menambal gejala, bukan akar masalah: custom resolver pun tidak
+    # bisa reach DNS manapun kalau network-nya sendiri tidak punya rute
+    # keluar). Bug ini SUDAH ADA sejak scaffold awal repo (bukan regresi
+    # docker-socket-proxy sesi observability dashboard), diverifikasi lewat
+    # iptables NAT table produksi (tidak ada MASQUERADE utk subnet cache
+    # maupun docker-proxy-net, cuma utk subnet web).
     networks:
+      - web
       - cache
       - docker-proxy-net
 
