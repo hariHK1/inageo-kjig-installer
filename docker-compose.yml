@@ -60,6 +60,12 @@ services:
       # dipanggil lewat nama service; kalau di host lain, isi URL penuhnya.
       # API_ACCESS_TOKEN WAJIB sama dengan milik harvester tujuan.
       API_BACKEND: ${API_BACKEND:-http://harvester:4000}
+      # true = harvester dikelola pihak lain (menu 20 deploy.sh mengisinya
+      # otomatis, menu 2 mengembalikannya ke false). Dipakai halaman admin
+      # Kesehatan Sistem & Skema Infrastruktur untuk menyatakan bahwa isinya
+      # bersumber dari harvester itu — tanpa penanda ini, angka milik pihak
+      # lain tampil seolah-olah kondisi server ini sendiri.
+      HARVESTER_EXTERNAL: ${HARVESTER_EXTERNAL:-false}
       # Fase 0 observability (opsional) — kosong = SDK Sentry no-op total,
       # app tetap jalan normal tanpanya. DSN didapat dari dashboard GlitchTip
       # (https://$DOMAIN:8443) setelah bikin akun+project di sana, BUKAN

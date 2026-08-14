@@ -61,6 +61,31 @@ Kalau container `app`/`harvester` mengalami gagal resolusi DNS intermiten (log `
 
 Isi `DNS_PRIMARY` (dan opsional `DNS_FALLBACK`, default `1.1.1.1`) di `.env` untuk membuat container query LANGSUNG ke DNS server, bypass jalur relay itu (`docker-compose.dns.yml`, sama pola dengan overlay port di atas — `install.sh` menambahkannya otomatis ke `COMPOSE_FILE` kalau `DNS_PRIMARY` diisi lewat wizard). `DNS_PRIMARY` sengaja tetap DNS server jaringan kamu sendiri (bukan diganti DNS publik) — sejumlah domain instansi (`big.go.id`, `ina-sdi.or.id`) resolve ke IP privat lewat resolver internal, DNS publik belum tentu punya jawaban yang sama.
 
+## Menjalankan APP tanpa harvester (harvester dikelola pihak lain)
+
+Dipakai kalau harvester di server ini diturunkan dan perannya diambil alih pihak lain — stack compose terpisah di server yang sama, atau host lain.
+
+**`./deploy.sh` → 20) Deploy APP SAJA** menyalakan `nginx`, `app`, `redis`, `mapproxy`, `minio`, `minio-init` (+`certbot` kalau bukan mode WAF). Harvester dan tumpukan datanya (postgres, redis-queue, elasticsearch, postgres-backup, docker-socket-proxy) tidak disentuh sama sekali.
+
+> **Ketiga service pendukung itu WAJIB ikut.** `app` bukan frontend statis: ia merender thumbnail peta (`sharp`) lalu menyimpannya ke MinIO, mem-proxy WMS/ArcGIS dengan cache Redis, dan menyajikan tile lewat MapProxy. Melepasnya bukan "meringankan" — itu mematikan fitur.
+
+Sebelum menyalakan apa pun, menu ini **memverifikasi `.env` lebih dulu**: menampilkan `API_BACKEND` dan `API_ACCESS_TOKEN`, lalu menanyakan apakah sudah sesuai. Jawab **Tidak** dan Anda bisa langsung mengubahnya di situ (kosongkan input = pertahankan nilai lama), lalu nilainya ditampilkan ulang untuk dicek.
+
+`API_ACCESS_TOKEN` **tidak pernah dicetak utuh** — ditampilkan tersamar plus **sidik jari** (8 hex pertama SHA-256). Sidik jari itulah alat pencocokannya dengan pengelola harvester tujuan: kedua pihak cukup membandingkan hash, tidak ada yang perlu menyebutkan tokennya.
+
+Yang perlu disiapkan:
+
+- **`API_BACKEND`** diisi alamat harvester tujuan. Kalau harvester itu container di server yang sama, ia **wajib ikut bergabung ke salah satu network stack ini** agar bisa dipanggil lewat nama service (mis. `http://harvester-mitra:4000`). Kalau di host lain, isi URL penuhnya.
+- **`API_ACCESS_TOKEN`** harus **sama persis** dengan milik harvester tujuan — harvester menolak semua permintaan yang tokennya tidak cocok.
+
+**`./deploy.sh` → 21) Hentikan harvester + tumpukan datanya** mematikan harvester dkk tanpa mengganggu `app` yang sedang melayani. Memakai `stop`, **bukan** `down` — volume data (`postgres_data`, `es_data`) tidak disentuh, jadi bisa dinyalakan lagi kapan pun lewat menu 2.
+
+### Akibat yang perlu diketahui
+
+Halaman admin **Kesehatan Sistem** dan **Skema Infrastruktur** mengambil datanya dari harvester. Begitu harvester berpindah, isinya mencerminkan apa yang dilaporkan harvester tersebut — status container & disk boleh jadi masih tepat (kalau satu server), tapi Skema Infrastruktur dibaca dari berkas compose **milik mereka**, jadi yang tampil layanan mereka.
+
+Karena itu `deploy.sh` menyetel `HARVESTER_EXTERNAL=true` otomatis di menu 20 (dan mengembalikannya ke `false` di menu 2), yang membuat kedua halaman itu menampilkan keterangan asal data. Datanya sengaja **tidak disembunyikan** — sebagian masih berguna; yang berbahaya adalah menyajikannya tanpa keterangan seolah kondisi server ini sendiri.
+
 ## Object storage (MinIO) & cache thumbnail katalog
 
 Service `minio` menyimpan **gambar pratinjau (thumbnail) katalog** yang sudah jadi, plus dokumen hasil harvest. Tanpa ini, peta berat (mis. batas desa se-Indonesia) harus digambar ulang oleh server instansi setiap kali ada pengunjung membuka katalog — lambat, dan berisiko membuat kita diblokir server sumber. Dengan cache ini, tiap layer digambar **sekali**.

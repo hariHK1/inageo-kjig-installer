@@ -456,6 +456,11 @@ action_deploy() {
         confirm "Lanjut deploy dengan image yang sudah ada secara lokal?" || return 1
     fi
     ensure_nginx_conf
+    # Deploy penuh berarti harvester kembali jadi milik stack ini — cabut
+    # penanda "dikelola pihak lain" supaya keterangan di halaman admin tidak
+    # tertinggal menyesatkan setelah peralihan balik.
+    env_set_kv HARVESTER_EXTERNAL false
+    export HARVESTER_EXTERNAL=false
     # WAJIB sebelum `up -d` — service minio membaca MINIO_ROOT_USER/PASSWORD
     # saat start; kalau kosong ia menolak semua koneksi sampai deploy
     # berikutnya (lihat ensure_minio_credentials).
@@ -611,6 +616,11 @@ action_deploy_app_only() {
         bootstrap_tls || return 1
         APP_ONLY_SERVICES="$APP_ONLY_SERVICES certbot"
     fi
+
+    # Tandai bahwa harvester bukan milik stack ini — dibaca halaman admin
+    # Kesehatan Sistem & Skema Infrastruktur untuk menyatakan asal datanya.
+    env_set_kv HARVESTER_EXTERNAL true
+    export HARVESTER_EXTERNAL=true
 
     log_info "Menyalakan service: $APP_ONLY_SERVICES"
     # SENGAJA tanpa migrasi database — skema Postgres itu milik harvester,
