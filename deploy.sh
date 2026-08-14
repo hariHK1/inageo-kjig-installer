@@ -404,9 +404,23 @@ action_pull() {
         || { log_error "Docker login gagal — cek username/token yang barusan diketik."; unset ghcr_token; return 1; }
     unset ghcr_token ghcr_username
     log_info "Pull image versi $RELEASE_VERSION..."
-    $COMPOSE_CMD pull app harvester harvester-seed \
-        || { log_error "Pull gagal — cek RELEASE_VERSION di .env memang sudah dirilis (lihat tab Releases repo source)."; return 1; }
-    log_ok "Image ter-pull."
+    local pull_rc=0
+    $COMPOSE_CMD pull app harvester harvester-seed || pull_rc=1
+
+    # Logout SELALU dijalankan, sukses maupun gagal. `docker login` di atas
+    # menuliskan kredensial ke ~/.docker/config.json sebagai base64 — itu
+    # PENYANDIAN, bukan pengamanan: siapa pun yang bisa membaca berkas itu
+    # (root, atau backup yang menyertakannya) langsung memperoleh tokennya.
+    # Prompt di atas sengaja tidak pernah menyimpan token ke .env justru untuk
+    # menghindari itu; membiarkannya mengendap di config.json membatalkan
+    # maksud tersebut. Token hanya dibutuhkan selama pull berlangsung.
+    docker logout ghcr.io >/dev/null 2>&1 || true
+
+    if [[ "$pull_rc" != "0" ]]; then
+        log_error "Pull gagal — cek RELEASE_VERSION di .env memang sudah dirilis (lihat tab Releases repo source)."
+        return 1
+    fi
+    log_ok "Image ter-pull. Kredensial ghcr.io sudah dihapus lagi dari server."
 }
 
 # Alternatif action_pull — untuk server TANPA akses ke ghcr.io sama sekali
