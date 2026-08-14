@@ -51,7 +51,15 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       MAPPROXY_SERVICE_URL: http://mapproxy/mapproxy/service
       MAPPROXY_MANIFEST_PATH: /app/mapproxy-config/layers-manifest.json
-      API_BACKEND: http://harvester:4000
+      # Alamat harvester. Default menunjuk service `harvester` di stack ini.
+      # DIBUAT BISA DIATUR supaya app bisa diarahkan ke harvester yang
+      # dikelola pihak lain (stack compose terpisah / host lain) tanpa
+      # mengubah berkas ini — lihat menu "Deploy APP saja" di deploy.sh.
+      # Kalau harvester itu container di stack lain pada server yang sama,
+      # ia harus ikut bergabung ke salah satu network di bawah agar bisa
+      # dipanggil lewat nama service; kalau di host lain, isi URL penuhnya.
+      # API_ACCESS_TOKEN WAJIB sama dengan milik harvester tujuan.
+      API_BACKEND: ${API_BACKEND:-http://harvester:4000}
       # Fase 0 observability (opsional) — kosong = SDK Sentry no-op total,
       # app tetap jalan normal tanpanya. DSN didapat dari dashboard GlitchTip
       # (https://$DOMAIN:8443) setelah bikin akun+project di sana, BUKAN
@@ -74,8 +82,12 @@ services:
           cpus: "${APP_CPU_RESERVATION:-0.5}"
           memory: ${APP_MEMORY_RESERVATION:-512M}
     depends_on:
+      # `harvester` SENGAJA TIDAK didaftarkan di sini. depends_on cuma
+      # mengatur URUTAN start, bukan kesiapan — app memang tidak memerlukan
+      # harvester saat boot (ia menembaknya belakangan, per-request). Kalau
+      # didaftarkan, `docker compose up -d app` akan IKUT menyalakan
+      # harvester, sehingga mode "app saja" mustahil dijalankan.
       - redis
-      - harvester
     networks:
       - web
       - cache

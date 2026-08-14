@@ -481,6 +481,100 @@ action_deploy() {
 # Ganti versi (upgrade ATAU rollback — tinggal isi nomor lebih baru/lama).
 # Cuma app+harvester yang di-recreate; postgres/redis/nginx/certbot tidak
 # disentuh, supaya data & TLS tidak terganggu.
+# Layanan yang membentuk "app saja" — TANPA harvester dan tanpa tumpukan
+# datanya (postgres, redis-queue, elasticsearch, postgres-backup,
+# docker-socket-proxy, harvester-seed).
+#
+# Perhatikan yang TETAP ikut: app BUKAN frontend statis. Ia merender thumbnail
+# peta (sharp) lalu menyimpannya ke MinIO, mem-proxy WMS/ArcGIS dgn cache
+# Redis, dan menyajikan tile lewat MapProxy. Melepas salah satu dari itu
+# bukan "meringankan" — itu mematikan fitur.
+APP_ONLY_SERVICES="nginx app redis mapproxy minio minio-init"
+
+# Deploy hanya sisi app, menunjuk ke harvester yang dikelola pihak lain.
+# Dipakai saat harvester di server ini diturunkan dan digantikan milik pihak
+# lain (stack compose terpisah / host lain) — lihat API_BACKEND di .env.
+action_deploy_app_only() {
+    if [[ "${API_BACKEND:-}" == "http://harvester:4000" || -z "${API_BACKEND:-}" ]]; then
+        log_warn "API_BACKEND masih menunjuk ke harvester stack ini (default)."
+        echo "  Mode ini TIDAK menyalakan harvester, jadi app tidak akan punya sumber data."
+        echo "  Isi API_BACKEND di .env dgn alamat harvester tujuan lebih dulu, misal:"
+        echo "    API_BACKEND=http://harvester-mitra:4000     (container di server yang sama)"
+        echo "    API_BACKEND=https://harvester.instansi.go.id (host lain)"
+        echo "  Catatan: API_ACCESS_TOKEN di .env WAJIB sama dgn milik harvester tujuan,"
+        echo "  dan kalau harvester itu container di server ini, ia harus ikut bergabung"
+        echo "  ke network stack ini agar bisa dipanggil lewat nama service."
+        confirm "Tetap lanjut tanpa mengubah API_BACKEND?" || return 1
+    fi
+
+    if [[ "${PULL_MODE:-true}" == "true" ]]; then
+        action_pull_app || return 1
+    else
+        log_warn "PULL_MODE=false — melewati pull, asumsi image app sudah dimuat lewat \"Load image dari bundle\"."
+        confirm "Lanjut deploy dengan image yang sudah ada secara lokal?" || return 1
+    fi
+
+    ensure_nginx_conf
+    ensure_minio_credentials
+    if [[ "${BEHIND_WAF:-false}" == "true" ]]; then
+        log_info "BEHIND_WAF=true — melewati bootstrap TLS/certbot."
+    else
+        bootstrap_tls || return 1
+        APP_ONLY_SERVICES="$APP_ONLY_SERVICES certbot"
+    fi
+
+    log_info "Menyalakan service: $APP_ONLY_SERVICES"
+    # SENGAJA tanpa migrasi database — skema Postgres itu milik harvester,
+    # dan di mode ini harvester bukan tanggung jawab stack ini lagi.
+    $COMPOSE_CMD up -d $APP_ONLY_SERVICES || return 1
+    $COMPOSE_CMD ps
+    log_ok "App aktif. Harvester TIDAK disentuh oleh menu ini."
+    log_info "Kalau harvester lama masih jalan di server ini, matikan lewat menu 21."
+}
+
+# Pull image app saja — harvester tidak ikut ditarik supaya tidak sia-sia
+# mengunduh image yang memang tidak akan dijalankan.
+action_pull_app() {
+    if [[ -z "${GHCR_OWNER:-}" || -z "${GHCR_REPO:-}" ]]; then
+        log_error "GHCR_OWNER/GHCR_REPO kosong di .env — tidak bisa pull."
+        return 1
+    fi
+    local ghcr_username ghcr_token
+    read -rp "GHCR_USERNAME (username GitHub untuk docker login): " ghcr_username
+    [[ -n "$ghcr_username" ]] || { log_error "GHCR_USERNAME tidak boleh kosong."; return 1; }
+    read -rsp "GHCR_TOKEN (PAT scope read:packages, tidak akan ditampilkan): " ghcr_token
+    echo ""
+    [[ -n "$ghcr_token" ]] || { log_error "GHCR_TOKEN tidak boleh kosong."; return 1; }
+
+    log_info "Login ke ghcr.io sebagai $ghcr_username..."
+    echo "$ghcr_token" | docker login ghcr.io -u "$ghcr_username" --password-stdin         || { log_error "Docker login gagal."; unset ghcr_token; return 1; }
+    unset ghcr_token ghcr_username
+
+    log_info "Pull image app versi $RELEASE_VERSION..."
+    local rc=0
+    $COMPOSE_CMD pull app || rc=1
+    # Lihat alasan lengkapnya di action_pull — token tidak boleh mengendap.
+    docker logout ghcr.io >/dev/null 2>&1 || true
+    if [[ "$rc" != "0" ]]; then
+        log_error "Pull gagal — cek RELEASE_VERSION di .env memang sudah dirilis."
+        return 1
+    fi
+    log_ok "Image app ter-pull. Kredensial ghcr.io sudah dihapus lagi dari server."
+}
+
+# Turunkan harvester + tumpukan datanya, tanpa mengganggu app yang sedang
+# melayani pengguna. Dipakai saat peran harvester dialihkan ke pihak lain.
+action_down_harvester() {
+    local svcs="harvester harvester-seed postgres postgres-backup redis-queue elasticsearch docker-socket-proxy"
+    log_warn "Service berikut akan DIHENTIKAN: $svcs"
+    echo "  Volume data (postgres_data, es_data) TIDAK dihapus — data tetap aman"
+    echo "  dan service bisa dinyalakan lagi kapan pun lewat menu 2."
+    confirm "Lanjutkan?" || return 1
+    $COMPOSE_CMD stop $svcs || return 1
+    log_ok "Harvester & tumpukan datanya dihentikan. App tetap berjalan."
+}
+
+
 action_set_version() {
     local current="${RELEASE_VERSION:-(belum diset)}"
     log_info "Versi saat ini: $current"
@@ -720,6 +814,8 @@ main_menu() {
         echo "17) Buat/reset akun admin dashboard"
         echo "18) Scale harvester (ganti jumlah replica)"
         echo "19) Cek port yang listening di host (self-check lokal)"
+        echo "20) Deploy APP SAJA (tanpa harvester — pakai harvester pihak lain)"
+        echo "21) Hentikan harvester + tumpukan datanya (app tetap jalan)"
         echo "0)  Keluar"
         read -rp "Pilih menu: " choice
         case "$choice" in
@@ -742,6 +838,8 @@ main_menu() {
             17) check_env && action_seed_admin ;;
             18) check_env && action_scale_harvester ;;
             19) action_check_exposed_ports ;;
+            20) check_env && action_deploy_app_only ;;
+            21) check_env && action_down_harvester ;;
             0) exit 0 ;;
             *) log_warn "Pilihan tidak valid." ;;
         esac
