@@ -494,18 +494,107 @@ APP_ONLY_SERVICES="nginx app redis mapproxy minio minio-init"
 # Deploy hanya sisi app, menunjuk ke harvester yang dikelola pihak lain.
 # Dipakai saat harvester di server ini diturunkan dan digantikan milik pihak
 # lain (stack compose terpisah / host lain) — lihat API_BACKEND di .env.
-action_deploy_app_only() {
-    if [[ "${API_BACKEND:-}" == "http://harvester:4000" || -z "${API_BACKEND:-}" ]]; then
-        log_warn "API_BACKEND masih menunjuk ke harvester stack ini (default)."
-        echo "  Mode ini TIDAK menyalakan harvester, jadi app tidak akan punya sumber data."
-        echo "  Isi API_BACKEND di .env dgn alamat harvester tujuan lebih dulu, misal:"
-        echo "    API_BACKEND=http://harvester-mitra:4000     (container di server yang sama)"
-        echo "    API_BACKEND=https://harvester.instansi.go.id (host lain)"
-        echo "  Catatan: API_ACCESS_TOKEN di .env WAJIB sama dgn milik harvester tujuan,"
-        echo "  dan kalau harvester itu container di server ini, ia harus ikut bergabung"
-        echo "  ke network stack ini agar bisa dipanggil lewat nama service."
-        confirm "Tetap lanjut tanpa mengubah API_BACKEND?" || return 1
+# Tulis/ubah satu pasangan KEY=VALUE di .env, apa pun kondisi awalnya
+# (baris belum ada, atau ada tapi kosong). Delimiter sed sengaja "|" karena
+# nilainya kerap berupa URL yang penuh "/"; "|" dan "&" di dalam nilai
+# di-escape supaya tidak diartikan sed ("&" berarti "seluruh yang cocok").
+env_set_kv() {
+    local key="$1" val="$2" esc
+    esc=${val//\/\\}; esc=${esc//|/\|}; esc=${esc//&/\&}
+    if grep -q "^${key}=" "$ENV_FILE"; then
+        sed -i "s|^${key}=.*|${key}=${esc}|" "$ENV_FILE"
+    else
+        printf '%s=%s\n' "$key" "$val" >> "$ENV_FILE"
     fi
+}
+
+# Tampilkan rahasia TANPA membocorkannya: sebagian karakter + sidik jari
+# (8 hex pertama SHA-256). Sidik jari inilah yang dipakai mencocokkan token
+# dgn pengelola harvester tujuan — kedua pihak cukup membandingkan hash,
+# tidak perlu ada yang menyebutkan tokennya.
+mask_secret() {
+    # DIPISAH per baris, BUKAN `local v="$1" n=${#v}` — pada `local`, SEMUA
+    # ekspansi dievaluasi sebelum penugasan berlaku, jadi ${#v} membaca `v`
+    # yang masih kosong dan n selalu 0. Akibatnya token yang jelas terisi
+    # dilaporkan "(KOSONG)" (ditemukan lewat uji, bukan tinjauan kode).
+    local v="$1"
+    local n=${#v}
+    local fp
+    if [[ $n -eq 0 ]]; then
+        echo "(KOSONG)"
+        return
+    fi
+    fp="$(printf '%s' "$v" | sha256sum | cut -c1-8)"
+    if [[ $n -le 8 ]]; then
+        echo "**** ($n karakter, sidik jari: $fp)"
+    else
+        echo "${v:0:4}…${v: -4} ($n karakter, sidik jari: $fp)"
+    fi
+}
+
+# Konfirmasi & perbaiki .env sebelum deploy app-saja. Dua nilai ini yang
+# menentukan app bicara ke harvester yang BENAR: salah satu meleset, app
+# hidup tapi tidak punya data (atau ditolak 401) — gejala yang membingungkan
+# kalau baru ketahuan setelah deploy.
+verify_app_only_env() {
+    while :; do
+        echo ""
+        log_info "=== Verifikasi sambungan ke harvester ==="
+        echo "  API_BACKEND      : ${API_BACKEND:-(kosong -> pakai default http://harvester:4000)}"
+        echo "  API_ACCESS_TOKEN : $(mask_secret "${API_ACCESS_TOKEN:-}")"
+        echo ""
+
+        if [[ -z "${API_BACKEND:-}" || "${API_BACKEND:-}" == "http://harvester:4000" ]]; then
+            log_warn "API_BACKEND menunjuk harvester stack INI, padahal mode ini tidak menyalakannya."
+        fi
+        if [[ -z "${API_ACCESS_TOKEN:-}" ]]; then
+            log_warn "API_ACCESS_TOKEN kosong — harvester menolak SEMUA permintaan tanpa token."
+        fi
+        echo "  Catatan: token di atas harus SAMA dgn milik harvester tujuan. Cocokkan"
+        echo "  sidik jarinya dgn pengelola harvester itu — tidak perlu saling menyebut token."
+
+        echo ""
+        if confirm "Kedua nilai di atas sudah sesuai?"; then
+            return 0
+        fi
+
+        echo ""
+        log_info "Kosongkan input (tekan Enter) untuk MEMPERTAHANKAN nilai sekarang."
+        local new_backend new_token
+        read -rp "  API_BACKEND baru: " new_backend
+        if [[ -n "$new_backend" ]]; then
+            if [[ ! "$new_backend" =~ ^https?://[^[:space:]]+$ ]]; then
+                log_error "'$new_backend' bukan URL http(s) yang valid — perubahan dibatalkan."
+                continue
+            fi
+            # Buang garis miring di ujung; app menyusun path sendiri di
+            # belakangnya, "//search/..." ditolak sebagian reverse proxy.
+            new_backend="${new_backend%/}"
+            env_set_kv API_BACKEND "$new_backend"
+            export API_BACKEND="$new_backend"
+            log_ok "API_BACKEND diperbarui."
+        fi
+
+        # -s: token tidak ditampilkan saat diketik, sama seperti prompt GHCR.
+        read -rsp "  API_ACCESS_TOKEN baru: " new_token
+        echo ""
+        if [[ -n "$new_token" ]]; then
+            env_set_kv API_ACCESS_TOKEN "$new_token"
+            export API_ACCESS_TOKEN="$new_token"
+            unset new_token
+            log_ok "API_ACCESS_TOKEN diperbarui."
+        fi
+        log_ok ".env disimpan. Nilai ditampilkan ulang untuk dicek."
+    done
+}
+
+
+action_deploy_app_only() {
+    # Verifikasi + perbaiki .env DULU — dua nilai inilah yang menentukan app
+    # bicara ke harvester yang benar. Kalau meleset, gejalanya baru muncul
+    # setelah deploy sebagai "data kosong" atau 401, yang jauh lebih sulit
+    # ditelusuri daripada dicegah di sini.
+    verify_app_only_env || return 1
 
     if [[ "${PULL_MODE:-true}" == "true" ]]; then
         action_pull_app || return 1
