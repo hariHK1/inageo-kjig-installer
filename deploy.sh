@@ -232,6 +232,73 @@ ensure_nginx_conf() {
 # belum ada), sama pola dgn ensure_nginx_conf. WAJIB dipanggil sebelum
 # `docker compose up` (bind-mount ke file yang belum ada bikin Docker diam-
 # diam bikin DIREKTORI kosong).
+# Lengkapi kredensial MinIO di .env kalau belum ada — service `minio` baru
+# ditambahkan ke stack (v0.2.23-dev), jadi instalasi LAMA punya .env tanpa
+# var-var ini. Tanpa helper ini, operator harus menjalankan ulang install.sh
+# (yang menimpa seluruh .env) hanya untuk menghidupkan cache thumbnail.
+#
+# Digenerate, bukan ditanyakan interaktif: deploy.sh sering dijalankan
+# non-interaktif, dan nilai ini murni internal (MinIO tidak pernah terekspos
+# ke luar network `cache`). MINIO_ACCESS_KEY/SECRET dibuat SAMA dgn root
+# credential supaya tidak perlu langkah manual bikin service-account dulu.
+#
+# HANYA menambah var yang benar-benar HILANG — nilai yang sudah diisi
+# operator (mis. menunjuk ke S3 eksternal) tidak pernah ditimpa.
+ensure_minio_credentials() {
+    local env_file="$SCRIPT_DIR/.env"
+    [[ -f "$env_file" ]] || return 0
+
+    local added=0 genpw
+    # Menangani DUA kondisi, bukan cuma satu: baris belum ada SAMA SEKALI
+    # (instalasi lama sebelum var ini diperkenalkan) DAN baris ada tapi
+    # NILAINYA KOSONG (mis. `MINIO_ACCESS_KEY=` yang sudah lama ada di
+    # .env.example versi lama). Kalau yang kedua tidak ditangani, app dapat
+    # kredensial kosong dan gagal autentikasi ke MinIO — cache diam-diam
+    # tidak pernah aktif tanpa error yang kelihatan. Nilai yang SUDAH diisi
+    # operator tidak pernah ditimpa.
+    _set_env_if_blank() {
+        local name="$1" value="$2"
+        if grep -qE "^${name}=.+" "$env_file"; then
+            return 0                                  # sudah terisi, hormati
+        elif grep -qE "^${name}=" "$env_file"; then
+            sed -i "s|^${name}=.*|${name}=${value}|" "$env_file"   # ada tapi kosong
+        else
+            printf '%s=%s\n' "$name" "$value" >> "$env_file"       # belum ada
+        fi
+        added=1
+    }
+
+    # Password digenerate hanya kalau belum ada nilainya; kalau sudah ada,
+    # dipakai ulang supaya MINIO_SECRET_KEY konsisten dgn MINIO_ROOT_PASSWORD.
+    # Karakternya dibatasi alfanumerik (tr -d '/+=') — aman dipakai di sed
+    # tanpa perlu escaping.
+    if grep -qE '^MINIO_ROOT_PASSWORD=.+' "$env_file"; then
+        genpw="$(grep -E '^MINIO_ROOT_PASSWORD=' "$env_file" | head -1 | cut -d= -f2-)"
+    else
+        genpw="$(openssl rand -base64 32 | tr -d '\n/+=')"
+    fi
+
+    # Blok penanda hanya kalau var-nya memang belum pernah ada di file.
+    if ! grep -qE '^MINIO_ROOT_USER=' "$env_file"; then
+        printf '\n# === Object storage MinIO (ditambahkan otomatis oleh deploy.sh) ===\n' >> "$env_file"
+    fi
+    _set_env_if_blank MINIO_ROOT_USER "inageo"
+    _set_env_if_blank MINIO_ROOT_PASSWORD "$genpw"
+    _set_env_if_blank MINIO_ACCESS_KEY "inageo"
+    _set_env_if_blank MINIO_SECRET_KEY "$genpw"
+    _set_env_if_blank THUMBNAIL_BUCKET "catalog-thumbnails"
+    _set_env_if_blank THUMBNAIL_TTL_DAYS "30"
+    unset -f _set_env_if_blank
+
+    if [[ "$added" == "1" ]]; then
+        log_ok "Kredensial MinIO dilengkapi otomatis di .env (cache thumbnail katalog aktif)."
+        # Muat ulang supaya `docker compose` di proses ini ikut melihatnya —
+        # tanpa ini service minio start dgn root credential KOSONG dan menolak
+        # semua koneksi sampai deploy berikutnya.
+        load_env_file "$SCRIPT_DIR/.env"
+    fi
+}
+
 ensure_infra_display_env() {
     local allowlist=(
         APP_CPU_LIMIT APP_MEMORY_LIMIT APP_CPU_RESERVATION APP_MEMORY_RESERVATION APP_REPLICAS
@@ -375,6 +442,10 @@ action_deploy() {
         confirm "Lanjut deploy dengan image yang sudah ada secara lokal?" || return 1
     fi
     ensure_nginx_conf
+    # WAJIB sebelum `up -d` — service minio membaca MINIO_ROOT_USER/PASSWORD
+    # saat start; kalau kosong ia menolak semua koneksi sampai deploy
+    # berikutnya (lihat ensure_minio_credentials).
+    ensure_minio_credentials
     ensure_infra_display_env
     if [[ "${BEHIND_WAF:-false}" == "true" ]]; then
         log_info "BEHIND_WAF=true — melewati bootstrap TLS/certbot."

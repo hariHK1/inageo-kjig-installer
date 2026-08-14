@@ -61,6 +61,19 @@ Kalau container `app`/`harvester` mengalami gagal resolusi DNS intermiten (log `
 
 Isi `DNS_PRIMARY` (dan opsional `DNS_FALLBACK`, default `1.1.1.1`) di `.env` untuk membuat container query LANGSUNG ke DNS server, bypass jalur relay itu (`docker-compose.dns.yml`, sama pola dengan overlay port di atas — `install.sh` menambahkannya otomatis ke `COMPOSE_FILE` kalau `DNS_PRIMARY` diisi lewat wizard). `DNS_PRIMARY` sengaja tetap DNS server jaringan kamu sendiri (bukan diganti DNS publik) — sejumlah domain instansi (`big.go.id`, `ina-sdi.or.id`) resolve ke IP privat lewat resolver internal, DNS publik belum tentu punya jawaban yang sama.
 
+## Object storage (MinIO) & cache thumbnail katalog
+
+Service `minio` menyimpan **gambar pratinjau (thumbnail) katalog** yang sudah jadi, plus dokumen hasil harvest. Tanpa ini, peta berat (mis. batas desa se-Indonesia) harus digambar ulang oleh server instansi setiap kali ada pengunjung membuka katalog — lambat, dan berisiko membuat kita diblokir server sumber. Dengan cache ini, tiap layer digambar **sekali**.
+
+- **Tidak diekspos sama sekali** — tanpa `ports:`, hanya di network `cache` (`internal: true`). Konsol admin MinIO (`:9001`) juga tidak dibuka; kelola lewat `docker compose exec` kalau perlu.
+- **Kredensial otomatis.** Instalasi baru: digenerate `install.sh`. Instalasi lama: dilengkapi otomatis oleh `deploy.sh` (`ensure_minio_credentials`) saat deploy berikutnya — **tidak perlu** menjalankan ulang `install.sh` (yang akan menimpa seluruh `.env`). Nilai yang sudah diisi operator tidak pernah ditimpa, jadi aman kalau kamu menunjuk ke S3/MinIO eksternal lewat `MINIO_ENDPOINT`.
+- **Bucket & masa berlaku** disiapkan service one-shot `minio-init` tiap `up -d` (idempoten): bucket `THUMBNAIL_BUCKET` (default `catalog-thumbnails`) + aturan kedaluwarsa `THUMBNAIL_TTL_DAYS` (default 30 hari).
+- **Kenapa ada masa berlaku?** Nama file thumbnail diturunkan dari isi metadata (bbox + layer + URL layanan), jadi perubahan metadata otomatis memicu gambar ulang. Yang **tidak** terdeteksi begitu: instansi mengubah *isi* petanya tanpa menyentuh metadata. Batas umur ini jaring pengamannya. Kalau perlu segera, ada tombol **"Bersihkan cache thumbnail"** di `/admin/kesehatan-sistem` (khusus Superadmin).
+- **Kalau MinIO mati/tidak dikonfigurasi**, thumbnail **tetap tampil** — cuma digambar langsung tiap kali dan tidak disimpan. Cache tidak pernah menjadi jalur gagal.
+- Verifikasi: `docker compose exec minio mc ilm rule ls local/catalog-thumbnails` harus menampilkan aturan kedaluwarsa.
+
+> `ALLOWED_BUCKETS` (allowlist untuk `/apis/file`, preview dokumen) **jangan** diisi bucket thumbnail — endpoint itu menerima nama berkas dari browser, sedangkan bucket thumbnail dilayani endpoint tersendiri yang tidak pernah begitu.
+
 ## Observability & backup (Fase 0)
 
 - **Backup Postgres otomatis** — service `postgres-backup` menjalankan `pg_dump -F c` (format custom, mendukung restore parsial) tiap `POSTGRES_BACKUP_INTERVAL_SECONDS` (default 86400 = 24 jam) ke volume `postgres_backups`, retensi `POSTGRES_BACKUP_RETENTION_DAYS` (default 14 hari) dihapus otomatis. Restore manual: `docker compose exec postgres-backup sh -c 'pg_restore -h postgres -U $POSTGRES_USER -d $POSTGRES_DB -c /backups/harvester-<timestamp>.dump'`.

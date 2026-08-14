@@ -451,17 +451,42 @@ run_wizard() {
     TOPO_URL_ATTR=$(ask "Teks atribusi/sumber basemap topografi" "")
 
     echo ""
-    log_info "=== Object storage MinIO (opsional) ==="
-    echo "Kosongkan MINIO_ENDPOINT kalau tidak dipakai — preview dokumen nonaktif graceful (503), tidak crash."
+    log_info "=== Object storage MinIO ==="
+    echo "Dipakai untuk: (1) cache thumbnail katalog — thumbnail digambar SEKALI lalu disimpan,"
+    echo "tanpa ini layer berat (mis. batas desa se-Indonesia) digambar ulang terus oleh server"
+    echo "instansi tiap kali ada yang membuka katalog; (2) preview dokumen harvest."
+    echo "Defaultnya memakai service 'minio' di stack ini (kredensial digenerate otomatis)."
     local MINIO_ENDPOINT MINIO_REGION MINIO_ACCESS_KEY MINIO_SECRET_KEY ALLOWED_BUCKETS
-    MINIO_ENDPOINT=$(ask "MINIO_ENDPOINT" "")
+    local MINIO_ROOT_USER MINIO_ROOT_PASSWORD THUMBNAIL_BUCKET THUMBNAIL_TTL_DAYS
+    MINIO_ENDPOINT=$(ask "MINIO_ENDPOINT (kosongkan = matikan object storage sepenuhnya)" "http://minio:9000")
     if [[ -n "$MINIO_ENDPOINT" ]]; then
         MINIO_REGION=$(ask "MINIO_REGION" "us-east-1")
-        MINIO_ACCESS_KEY=$(ask_required "MINIO_ACCESS_KEY")
-        MINIO_SECRET_KEY=$(ask_required "MINIO_SECRET_KEY")
-        ALLOWED_BUCKETS=$(ask_required "ALLOWED_BUCKETS (dipisah koma)")
+        THUMBNAIL_BUCKET=$(ask "Bucket cache thumbnail katalog" "catalog-thumbnails")
+        # Umur ini jaring pengaman untuk kasus yang TIDAK tertangkap kunci-konten:
+        # instansi mengubah isi peta tanpa mengubah metadata/bbox.
+        THUMBNAIL_TTL_DAYS=$(ask "Umur maksimal thumbnail tersimpan (hari)" "30")
+        if [[ "$MINIO_ENDPOINT" == "http://minio:9000" ]]; then
+            # Service minio bawaan stack — kredensial root digenerate, dan
+            # ACCESS/SECRET app dibuat SAMA supaya tidak perlu langkah manual
+            # bikin service-account dulu sebelum sistem bisa dipakai.
+            MINIO_ROOT_USER="inageo"
+            MINIO_ROOT_PASSWORD="$(gen_password)"
+            MINIO_ACCESS_KEY="$MINIO_ROOT_USER"
+            MINIO_SECRET_KEY="$MINIO_ROOT_PASSWORD"
+            log_ok "MINIO_ROOT_PASSWORD digenerate otomatis dan disimpan ke .env."
+        else
+            MINIO_ROOT_USER=""; MINIO_ROOT_PASSWORD=""
+            MINIO_ACCESS_KEY=$(ask_required "MINIO_ACCESS_KEY")
+            MINIO_SECRET_KEY=$(ask_required "MINIO_SECRET_KEY")
+        fi
+        # Allowlist khusus /apis/file (preview dokumen, key datang dari klien).
+        # Bucket thumbnail SENGAJA tidak masuk sini — dilayani endpoint sendiri
+        # yang tidak pernah menerima key dari klien.
+        ALLOWED_BUCKETS=$(ask "ALLOWED_BUCKETS untuk preview dokumen (dipisah koma, boleh kosong)" "")
     else
         MINIO_REGION="us-east-1"; MINIO_ACCESS_KEY=""; MINIO_SECRET_KEY=""; ALLOWED_BUCKETS=""
+        MINIO_ROOT_USER=""; MINIO_ROOT_PASSWORD=""
+        THUMBNAIL_BUCKET="catalog-thumbnails"; THUMBNAIL_TTL_DAYS="30"
     fi
 
     echo ""
@@ -544,6 +569,9 @@ run_wizard() {
     echo "  (kosong semua = pakai default publik RBI BIG/ArcGIS Online)"
     echo "PostGIS               : user=$POSTGRES_USER db=$POSTGRES_DB (password digenerate)"
     echo "MinIO                 : ${MINIO_ENDPOINT:-(tidak dipakai)}"
+    if [[ -n "$MINIO_ENDPOINT" ]]; then
+        echo "  cache thumbnail     : bucket=$THUMBNAIL_BUCKET, kedaluwarsa ${THUMBNAIL_TTL_DAYS} hari"
+    fi
     echo "Backup Postgres       : tiap ${POSTGRES_BACKUP_INTERVAL_SECONDS}s, retensi ${POSTGRES_BACKUP_RETENTION_DAYS} hari"
     echo "Dashboard ops         : GlitchTip/Uptime Kuma via /admin/kesehatan-sistem (isi token API manual pasca-deploy)"
     echo ""
@@ -611,11 +639,15 @@ POSTGRES_BACKUP_RETENTION_DAYS=$POSTGRES_BACKUP_RETENTION_DAYS
 # === Elasticsearch (fitur "Cari Data" — katalog + isi-data) ===
 ELASTIC_PASSWORD=$ELASTIC_PASSWORD
 
-# === Object storage untuk preview dokumen harvest (opsional) ===
+# === Object storage: cache thumbnail katalog + preview dokumen harvest ===
 MINIO_ENDPOINT=$MINIO_ENDPOINT
 MINIO_REGION=$MINIO_REGION
+MINIO_ROOT_USER=$MINIO_ROOT_USER
+MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD
 MINIO_ACCESS_KEY=$MINIO_ACCESS_KEY
 MINIO_SECRET_KEY=$MINIO_SECRET_KEY
+THUMBNAIL_BUCKET=$THUMBNAIL_BUCKET
+THUMBNAIL_TTL_DAYS=$THUMBNAIL_TTL_DAYS
 ALLOWED_BUCKETS=$ALLOWED_BUCKETS
 
 # === Docker Compose / nginx (+ certbot kalau tidak di belakang WAF) ===

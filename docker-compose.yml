@@ -8,11 +8,22 @@ services:
     restart: unless-stopped
     environment:
       API_ACCESS_TOKEN: ${API_ACCESS_TOKEN}
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      # Default menunjuk ke service `minio` di stack ini (lihat definisinya di
+      # bawah). Boleh di-override ke S3/MinIO eksternal lewat .env.
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
       MINIO_REGION: ${MINIO_REGION:-us-east-1}
+      # Isi SAMA dgn MINIO_ROOT_USER/MINIO_ROOT_PASSWORD kalau memakai service
+      # `minio` bawaan stack — install.sh mengisinya otomatis utk instalasi
+      # baru, deploy.sh (ensure_minio_credentials) melengkapinya otomatis utk
+      # instalasi lama yang .env-nya belum punya var ini.
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      # Allowlist bucket yang boleh disajikan /apis/file (preview dokumen
+      # harvest, key datang DARI KLIEN). Bucket thumbnail SENGAJA TIDAK
+      # dimasukkan ke sini — ia dilayani endpoint sendiri yang tidak pernah
+      # menerima key dari klien.
       ALLOWED_BUCKETS: ${ALLOWED_BUCKETS}
+      THUMBNAIL_BUCKET: ${THUMBNAIL_BUCKET:-catalog-thumbnails}
       # Guard proxy /apis/[...path] & /apis/harvest/csw-records/[uuid] (POST/
       # DELETE) — lihat src/app/apis/_lib/admin-auth.ts di repo source.
       ADMIN_API_TOKEN: ${ADMIN_API_TOKEN}
@@ -545,6 +556,75 @@ services:
     networks:
       - cache
 
+  # Object storage S3-compatible. DUA pemakai:
+  #   1. Cache thumbnail katalog (alasan utama service ini dibuat) — thumbnail
+  #      dirender SEKALI lalu disimpan permanen. Tanpa ini, layer berat (mis.
+  #      batas desa se-Indonesia) dirender ULANG di server instansi tiap kali
+  #      cache Redis 1 jam habis, untuk tiap pengunjung baru — lambat &
+  #      berisiko membebani/diblokir server sumber (preseden nyata: WAF
+  #      Sumatera Barat).
+  #   2. Preview dokumen harvest — fitur lama yang selama ini MATI karena
+  #      MINIO_ENDPOINT tidak pernah diisi.
+  # Tanpa `ports:` & hanya network "cache" (internal:true) — sama filosofi
+  # isolasi postgres/redis, tidak pernah dijangkau dari luar. Konsol admin
+  # (:9001) SENGAJA tidak diekspos; kelola lewat `docker compose exec`.
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - cache
+
+  # One-shot: buat bucket thumbnail + pasang aturan kedaluwarsa otomatis.
+  # BUKAN `profiles: ["tools"]` (beda dari harvester-seed yang sengaja manual)
+  # — ini WAJIB jalan tiap `up -d`, karena bucket & lifecycle rule adalah
+  # prasyarat endpoint thumbnail, bukan tindakan opsional operator. Semua
+  # perintahnya idempoten, aman dijalankan berulang.
+  #
+  # Lifecycle rule INILAH satu-satunya mekanisme kedaluwarsa cache thumbnail —
+  # SENGAJA tidak ada job cleanup di kode aplikasi. Perlu karena kunci cache
+  # berbasis KONTEN (bbox live + layer + URL service): kalau instansi mengubah
+  # ISI petanya tanpa mengubah metadata/bbox, kuncinya tidak berubah dan
+  # thumbnail lama akan basi selamanya tanpa jaring pengaman umur ini.
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    restart: on-failure
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      THUMBNAIL_BUCKET: ${THUMBNAIL_BUCKET:-catalog-thumbnails}
+      THUMBNAIL_TTL_DAYS: ${THUMBNAIL_TTL_DAYS:-30}
+    entrypoint: >
+      /bin/sh -c '
+        set -e;
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD";
+        mc mb --ignore-existing "local/$$THUMBNAIL_BUCKET";
+        mc ilm rule remove --all --force "local/$$THUMBNAIL_BUCKET" || true;
+        mc ilm rule add --expire-days "$$THUMBNAIL_TTL_DAYS" "local/$$THUMBNAIL_BUCKET";
+        echo "[minio-init] bucket $$THUMBNAIL_BUCKET siap, kedaluwarsa $$THUMBNAIL_TTL_DAYS hari";
+      '
+    networks:
+      - cache
+
 volumes:
   nginx_cache:
   mapproxy_cache:
@@ -555,6 +635,7 @@ volumes:
   glitchtip_postgres_data:
   glitchtip_uploads:
   uptime_kuma_data:
+  minio_data:
 
 networks:
   web:
