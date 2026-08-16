@@ -636,7 +636,7 @@ services:
         set -e;
         mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD";
         mc mb --ignore-existing "local/$$THUMBNAIL_BUCKET";
-        mc ilm rule remove --all --force "local/$$THUMBNAIL_BUCKET" || true;
+        mc ilm rule remove --all --force "local/$$THUMBNAIL_BUCKET" 2>/dev/null || true;
         mc ilm rule add --expire-days "$$THUMBNAIL_TTL_DAYS" "local/$$THUMBNAIL_BUCKET";
         echo "[minio-init] bucket $$THUMBNAIL_BUCKET siap, kedaluwarsa $$THUMBNAIL_TTL_DAYS hari";
       '
