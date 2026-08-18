@@ -92,6 +92,14 @@ server {
 
     set $app_up http://app:3000;
 
+    # Lihat catatan lengkap di default.conf.example — fixture data
+    # pengembangan berisi kontak PIC yang pernah terbuka publik lewat
+    # public/ Next.js. Jaring pengaman lapis kedua (image baru sudah tidak
+    # memuatnya sama sekali); `= ` exact match mengalahkan `location /`.
+    location = /sample-csw.json {
+        return 404;
+    }
+
     location /_next/static/ {
         proxy_pass $app_up$request_uri;
         include /etc/nginx/snippets/proxy-common-waf.conf;

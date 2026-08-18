@@ -136,6 +136,21 @@ server {
     # `resolver` di atas, bukan cache sekali di startup.
     set $app_up http://app:3000;
 
+    # Fixture data pengembangan yang PERNAH ikut terbit ke produksi lewat
+    # public/ Next.js (yang disajikan di root web tanpa syarat) — isinya
+    # memuat kontak PIC (nama/email/telepon) ratusan instansi, dan produksi
+    # sendiri TIDAK PERNAH memakainya (DATA_SOURCE=backend). Terverifikasi
+    # nyata terbuka publik & terunduh penuh sebelum ditutup.
+    #
+    # Sejak rilis yang memindahkannya ke data/ (di luar public/), file ini
+    # sudah tidak ada lagi di image — blok ini jaring pengaman lapis kedua:
+    # melindungi juga instalasi yang MASIH memakai image lama, dan menutup
+    # kemungkinan file serupa tidak sengaja masuk public/ lagi. `= ` (exact
+    # match) mengalahkan prefix `location /` di bawah.
+    location = /sample-csw.json {
+        return 404;
+    }
+
     location /_next/static/ {
         proxy_pass $app_up$request_uri;
         include /etc/nginx/snippets/proxy-common.conf;
