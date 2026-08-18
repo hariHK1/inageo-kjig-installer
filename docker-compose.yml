@@ -66,6 +66,29 @@ services:
       # bersumber dari harvester itu — tanpa penanda ini, angka milik pihak
       # lain tampil seolah-olah kondisi server ini sendiri.
       HARVESTER_EXTERNAL: ${HARVESTER_EXTERNAL:-false}
+      # Host GeoServer (batas wilayah + peta simpul jaringan /beranda) — sama
+      # pola hardcode host non-secret dgn MAPPROXY_SERVICE_URL di atas, hanya
+      # reachable lewat network "cache". Kredensial admin dipakai SERVER-SIDE
+      # SAJA oleh rute upload SHP (halaman admin Manajemen Peta) — TIDAK
+      # PERNAH dikirim ke browser. App tetap jalan normal kalau GeoServer
+      # mati/belum di-deploy — TIDAK ditaruh di `depends_on` di bawah, sama
+      # seperti mapproxy/minio, supaya downtime-nya tidak menjatuhkan app.
+      #
+      # KOSONG BY DEFAULT — GeoServer itu OPSIONAL (service-nya di-gate profil
+      # "geoserver", lihat definisinya di bawah). Kosong = fitur dianggap
+      # tidak dipasang: proxy balas 503 GEOSERVER_NOT_CONFIGURED, section
+      # "Peta Simpul Jaringan" di /beranda otomatis SEMBUNYI, dan menu
+      # "Manajemen Peta" di dashboard admin ikut disembunyikan. Utk
+      # MENGAKTIFKAN, isi DUA-DUANYA di .env:
+      #   COMPOSE_PROFILES=geoserver
+      #   GEOSERVER_URL=http://geoserver:8080/geoserver
+      GEOSERVER_URL: ${GEOSERVER_URL:-}
+      GEOSERVER_ADMIN_USER: ${GEOSERVER_ADMIN_USER:-admin}
+      # Default kosong supaya instalasi TANPA profil geoserver tidak dipaksa
+      # mengisi variabel fitur yang tidak dipakainya. Saat profil AKTIF ini
+      # tetap WAJIB diisi sungguhan (kosong = admin console GeoServer tanpa
+      # password). Generate: openssl rand -base64 24
+      GEOSERVER_ADMIN_PASSWORD: ${GEOSERVER_ADMIN_PASSWORD:-}
       # Fase 0 observability (opsional) — kosong = SDK Sentry no-op total,
       # app tetap jalan normal tanpanya. DSN didapat dari dashboard GlitchTip
       # (https://$DOMAIN:8443) setelah bikin akun+project di sana, BUKAN
@@ -205,8 +228,10 @@ services:
     # mapproxy(4C/2G) + redis(1C/0.75G) + postgres(4C/8G) +
     # postgres-backup(1C/0.5G) + redis-queue(1C/0.5G) + harvester(1×1C/1G) +
     # glitchtip-postgres(1C/0.5G) + glitchtip-valkey(0.5C/0.25G) +
-    # glitchtip(1C/0.5G) + uptime-kuma(0.5C/0.25G) ≈ 18 core / 18,875GB —
-    # sesuaikan dgn kapasitas host produksi sesungguhnya sebelum menaikkan
+    # glitchtip(1C/0.5G) + uptime-kuma(0.5C/0.25G) + minio(1C/0.5G) +
+    # geoserver-db(1C/1G) + geoserver(1C/2G) ≈ 21 core / 22,375GB (minio
+    # sebelumnya tidak ikut terhitung — ditambahkan sekarang) — sesuaikan
+    # dgn kapasitas host produksi sesungguhnya sebelum menaikkan
     # APP_REPLICAS/HARVESTER_REPLICAS jauh lebih tinggi dari default.
     deploy:
       resources:
@@ -643,6 +668,79 @@ services:
     networks:
       - cache
 
+  # ── Peta batas wilayah (Provinsi/Kabupaten/Kota) untuk section "Peta Simpul
+  # Jaringan" /beranda — diporting dari repo source, DUA service khusus
+  # (bukan numpang di `postgres`/harvester) sama filosofi glitchtip-postgres:
+  # isolasi budget koneksi & backup, dataset ini murni GEOMETRI STATIS
+  # (bukan data operasional harvester).
+  #
+  # PENTING: warna status simpul (Terhubung/Gangguan) TIDAK PERNAH disimpan
+  # di sini — GeoServer/PostGIS ini HANYA menyajikan batas wilayah polos.
+  # Status live tetap dari simpul_jaringan (Postgres harvester), digabung di
+  # BROWSER — supaya cache GWC di bawah boleh di-cache selama-lamanya tanpa
+  # perlu tahu kapan status simpul berubah.
+  geoserver-db:
+    image: postgis/postgis:16-3.4-alpine
+    restart: unless-stopped
+    # OPSIONAL — service ini & `geoserver` di bawah HANYA jalan kalau profil
+    # "geoserver" diaktifkan (COMPOSE_PROFILES=geoserver di .env). Tanpa itu
+    # keduanya tidak pernah dibuat: instalasi yang tidak butuh peta batas
+    # wilayah hemat ~3 core/3GB, dan fitur terkaitnya otomatis sembunyi di UI
+    # (bukan tampil rusak). Lihat GEOSERVER_URL di service `app` di atas.
+    profiles: ["geoserver"]
+    environment:
+      POSTGRES_USER: ${GEOSERVER_DB_USER:-geoserver}
+      # `:-` supaya instalasi tanpa profil ini tidak dibanjiri warning
+      # "variable is not set" (Compose menginterpolasi seluruh file, termasuk
+      # service yang profilnya mati). Jaring pengamannya tetap utuh: image
+      # Postgres sendiri MENOLAK start tanpa password.
+      POSTGRES_PASSWORD: ${GEOSERVER_DB_PASSWORD:-}
+      POSTGRES_DB: ${GEOSERVER_DB_NAME:-geoserver}
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+    volumes:
+      - geoserver_db_data:/var/lib/postgresql/data
+    networks:
+      - cache
+
+  geoserver:
+    # Image kartoza sudah membundel GeoWebCache (GWC) — "geoserver cache" =
+    # fitur bawaan GWC ini, blobstore-nya dikonfigurasi tipe MBTiles lewat
+    # admin UI/REST GeoServer setelah container jalan, bukan lewat compose.
+    image: kartoza/geoserver:2.25.2
+    restart: unless-stopped
+    # Opsional — lihat catatan profil di `geoserver-db` di atas.
+    profiles: ["geoserver"]
+    environment:
+      GEOSERVER_ADMIN_USER: ${GEOSERVER_ADMIN_USER:-admin}
+      GEOSERVER_ADMIN_PASSWORD: ${GEOSERVER_ADMIN_PASSWORD:-}
+      # Bukan auto-config datastore — kredensial ini dipakai rute upload
+      # admin (repo source: src/app/apis/admin-local/manajemen-peta/upload)
+      # utk membuat/menghubungkan datastore PostGIS lewat REST API GeoServer
+      # saat SHP pertama diunggah.
+      GEOSERVER_DB_HOST: geoserver-db
+      GEOSERVER_DB_PORT: "5432"
+      GEOSERVER_DB_NAME: ${GEOSERVER_DB_NAME:-geoserver}
+      GEOSERVER_DB_USER: ${GEOSERVER_DB_USER:-geoserver}
+      GEOSERVER_DB_PASSWORD: ${GEOSERVER_DB_PASSWORD:-}
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+    volumes:
+      - geoserver_data:/opt/geoserver/data_dir
+    depends_on:
+      - geoserver-db
+    networks:
+      - cache
+    # Tanpa `ports:` — SATU-SATUNYA jalur browser mencapai GeoServer adalah
+    # apis/map/geoserver-proxy (repo source, host internal tetap dari env
+    # GEOSERVER_URL), persis pola isolasi mapproxy.
+
 volumes:
   nginx_cache:
   mapproxy_cache:
@@ -654,6 +752,8 @@ volumes:
   glitchtip_uploads:
   uptime_kuma_data:
   minio_data:
+  geoserver_db_data:
+  geoserver_data:
 
 networks:
   web:
