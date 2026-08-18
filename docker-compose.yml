@@ -33,6 +33,14 @@ services:
       # reCAPTCHA login /admin/login — opsional, dua-duanya kosong = mati.
       RECAPTCHA_SITE_KEY: ${RECAPTCHA_SITE_KEY}
       RECAPTCHA_SECRET_KEY: ${RECAPTCHA_SECRET_KEY}
+      # Terjemahan otomatis ID->EN di CMS beranda (halaman admin "Manajemen
+      # Beranda") — OPSIONAL, kosong = tombolnya disembunyikan & rute
+      # terjemahan balas 501, sisa CMS tetap berfungsi penuh. Server-side
+      # saja: key ini TIDAK PERNAH dikirim ke browser, hanya boolean
+      # "aktif/tidak" yang diteruskan ke halaman lewat runtime config.
+      # Mengaktifkan berarti teks yang diterjemahkan dikirim ke server DeepL
+      # (pihak ketiga, luar negeri) — pertimbangkan kebijakan instansi.
+      DEEPL_API_KEY: ${DEEPL_API_KEY:-}
       # Config publik — dibaca RUNTIME oleh image (src/lib/runtimeConfig.ts di
       # repo source), BUKAN di-bake saat build lagi. Ganti nilai di .env +
       # `docker compose up -d app` cukup, tidak perlu tag rilis baru sama
