@@ -599,6 +599,10 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-harvester}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-harvester}
       REDIS_QUEUE_URL: redis://:${REDIS_QUEUE_PASSWORD}@redis-queue:6379
+      # Script ini tidak menyentuh ES sama sekali, tapi config.ts harvester
+      # mewajibkan var ini utk SEMUA entrypoint (required(), lihat config.ts) —
+      # tanpa ini proses gagal start sebelum sempat jalan.
+      ELASTICSEARCH_URL: http://elastic:${ELASTIC_PASSWORD}@elasticsearch:9200
       API_ACCESS_TOKEN: ${API_ACCESS_TOKEN}
       SAMPLE_CSW_PATH: /app/public/sample-csw.json
     command: node dist/scripts/seed-from-sample.js
