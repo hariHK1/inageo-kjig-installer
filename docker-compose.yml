@@ -604,7 +604,7 @@ services:
       # tanpa ini proses gagal start sebelum sempat jalan.
       ELASTICSEARCH_URL: http://elastic:${ELASTIC_PASSWORD}@elasticsearch:9200
       API_ACCESS_TOKEN: ${API_ACCESS_TOKEN}
-      SAMPLE_CSW_PATH: /app/public/sample-csw.json
+      SAMPLE_CSW_PATH: /app/data/sample-csw.json
     command: node dist/scripts/seed-from-sample.js
     depends_on:
       - postgres
