@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Layanan sedang tidak tersedia | Ina-Geoportal</title>
+<!--
+  Halaman error milik NGINX — hanya tampil untuk kegagalan yang dijawab nginx
+  SENDIRI (container app mati/belum siap, rate-limit terlampaui, unggahan
+  melebihi client_max_body_size). Semua error LAIN ditangani aplikasi Next.js
+  (src/app/not-found.tsx, error.tsx, global-error.tsx) yang tampilannya
+  sengaja dibuat serupa dengan halaman ini.
+
+  WAJIB self-contained: tidak boleh memuat CSS/JS/font/gambar dari luar —
+  saat halaman ini tampil, app (satu-satunya sumber aset) justru sedang tidak
+  bisa dihubungi. Gaya ditulis inline seadanya, tanpa dependensi apa pun.
+-->
+<style>
+  html, body { margin: 0; height: 100%; }
+  body {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    min-height: 100%; padding: 4rem 1.5rem; box-sizing: border-box;
+    background: #fff; color: #0f172a; text-align: center;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .code { margin: 0; font-size: 3.75rem; font-weight: 700; letter-spacing: -.025em; color: #cbd5e1;
+          font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  h1 { margin: 1rem 0 0; font-size: 1.25rem; font-weight: 600; }
+  p { margin: .5rem 0 0; max-width: 28rem; font-size: .875rem; line-height: 1.6; color: #475569; }
+  a { display: inline-block; margin-top: 2rem; padding: .5rem 1rem; border-radius: .5rem;
+      background: #0f172a; color: #fff; font-size: .875rem; font-weight: 500; text-decoration: none; }
+  a:hover { background: #334155; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #0f172a; color: #f1f5f9; }
+    .code { color: #334155; }
+    p { color: #94a3b8; }
+    a { background: #f1f5f9; color: #0f172a; }
+    a:hover { background: #cbd5e1; }
+  }
+</style>
+</head>
+<body>
+  <p class="code">503</p>
+  <h1>Layanan sedang tidak tersedia</h1>
+  <p>
+    Server sedang tidak dapat melayani permintaan ini — kemungkinan sedang
+    dalam pemeliharaan, atau permintaan terlalu banyak dalam waktu singkat.
+    Silakan coba beberapa saat lagi.
+  </p>
+  <a href="/">Coba Lagi</a>
+</body>
+</html>

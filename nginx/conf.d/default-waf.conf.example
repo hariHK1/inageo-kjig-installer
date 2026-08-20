@@ -92,6 +92,23 @@ server {
 
     set $app_up http://app:3000;
 
+    # Halaman error milik nginx — HANYA untuk kegagalan yang dijawab nginx
+    # SENDIRI: container app mati/belum siap (502/504), rate-limit terlampaui
+    # (503), atau unggahan melebihi client_max_body_size (413). Itulah
+    # satu-satunya kelas error yang tidak pernah sampai ke Next.js, sehingga
+    # not-found.tsx/error.tsx/global-error.tsx tidak bisa menanganinya.
+    #
+    # `proxy_intercept_errors` SENGAJA dibiarkan off (default): tanpa itu,
+    # status error yang datang DARI aplikasi (mis. 404/500/502 buatan route
+    # handler Next.js atau harvester) diteruskan APA ADANYA ke klien —
+    # termasuk body JSON milik /apis/*, yang tidak boleh tiba-tiba berubah
+    # jadi HTML dan memutus pemanggilnya.
+    error_page 413 500 502 503 504 /error.html;
+    location = /error.html {
+        root /usr/share/nginx/html;
+        internal;
+    }
+
     # Lihat catatan lengkap di default.conf.example — fixture data
     # pengembangan berisi kontak PIC yang pernah terbuka publik lewat
     # public/ Next.js. Jaring pengaman lapis kedua (image baru sudah tidak

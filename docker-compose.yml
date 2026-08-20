@@ -150,6 +150,10 @@ services:
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./nginx/snippets:/etc/nginx/snippets:ro
+      # Halaman error statis nginx (lihat error_page di conf.d/*.conf) —
+      # dipakai saat app tidak bisa dihubungi, jadi tidak boleh bergantung
+      # pada app untuk asetnya.
+      - ./nginx/html:/usr/share/nginx/html:ro
       - ./certbot/conf:/etc/letsencrypt:ro
       - ./certbot/www:/var/www/certbot:ro
       - nginx_cache:/var/cache/nginx
