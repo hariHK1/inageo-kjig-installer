@@ -41,6 +41,16 @@ services:
       # Mengaktifkan berarti teks yang diterjemahkan dikirim ke server DeepL
       # (pihak ketiga, luar negeri) — pertimbangkan kebijakan instansi.
       DEEPL_API_KEY: ${DEEPL_API_KEY:-}
+      # Fitur opsional per-instalasi (dipilih saat install.sh membuat .env).
+      # 'false' = menu terkait DISEMBUNYIKAN dari sidebar dashboard admin.
+      # Default AKTIF kalau variabelnya tidak ada sama sekali, supaya
+      # instalasi lama tidak kehilangan menu setelah upgrade
+      # (lihat features di src/lib/runtimeConfig.ts).
+      FEATURE_GLITCHTIP: ${FEATURE_GLITCHTIP:-true}
+      FEATURE_UPTIME_KUMA: ${FEATURE_UPTIME_KUMA:-true}
+      FEATURE_INFRA_SCHEMA: ${FEATURE_INFRA_SCHEMA:-true}
+      FEATURE_LOGIN_HISTORY: ${FEATURE_LOGIN_HISTORY:-true}
+      FEATURE_BERANDA_CMS: ${FEATURE_BERANDA_CMS:-true}
       # Config publik — dibaca RUNTIME oleh image (src/lib/runtimeConfig.ts di
       # repo source), BUKAN di-bake saat build lagi. Ganti nilai di .env +
       # `docker compose up -d app` cukup, tidak perlu tag rilis baru sama
@@ -383,6 +393,18 @@ services:
       REDIS_QUEUE_URL: redis://:${REDIS_QUEUE_PASSWORD}@redis-queue:6379
       API_ACCESS_TOKEN: ${API_ACCESS_TOKEN}
       SCAN_INTERVAL_MS: ${HARVEST_SCAN_INTERVAL_MS:-3600000}
+      # Retensi riwayat proses harvest (monitoring/retentionSampler.ts).
+      # Job harian 03:00 WIB: meringkas harvest_runs ke harvest_daily_summary
+      # (disimpan selamanya, dasar grafik tren) LALU membuang baris mentah
+      # yang lewat ambang. Sebelum ini tidak ada pembersihan sama sekali —
+      # riwayat tumbuh ~2,3 GB/tahun.
+      # RETENTION_RUN_DAYS sengaja > rentang terlama chart Analitik (90 hari):
+      # chart masih membaca harvest_runs MENTAH, jadi ambang yang lebih pendek
+      # membuat batang di ujung grafik hilang tanpa pesan error.
+      RETENTION_ENABLED: ${RETENTION_ENABLED:-true}
+      RETENTION_RUN_DAYS: ${RETENTION_RUN_DAYS:-120}
+      RETENTION_ENRICH_LOG_DAYS: ${RETENTION_ENRICH_LOG_DAYS:-30}
+      RETENTION_MEMORY_SAMPLE_DAYS: ${RETENTION_MEMORY_SAMPLE_DAYS:-30}
       # Fitur "Cari Data" (katalog + isi-data) — cuma harvester yang bicara ke
       # ES, sama seperti Postgres/Redis-queue; app tidak pernah konek langsung
       # ke sini, semua lewat HTTP API harvester (lihat GET /search/* di source).

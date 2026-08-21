@@ -539,6 +539,33 @@ run_wizard() {
     echo "Email GlitchTip dikosongkan (consolemail:// — notifikasi cuma tercatat di log container, dashboard tetap berfungsi penuh). Isi manual di .env kalau perlu SMTP."
 
     echo ""
+    log_info "=== Fitur opsional dashboard admin ==="
+    echo "Fitur yang dimatikan di sini menyembunyikan menunya dari sidebar dashboard,"
+    echo "termasuk untuk role Superadmin. Semua bisa diubah kapan saja lewat .env +"
+    echo "'docker compose up -d app' — tidak perlu instal ulang."
+    echo ""
+    echo "CATATAN: ini menyembunyikan MENU, bukan mencabut halamannya. Alamat halaman"
+    echo "terkait masih bisa dibuka langsung oleh yang mengetahuinya."
+    echo ""
+    local FEATURE_GLITCHTIP FEATURE_UPTIME_KUMA FEATURE_INFRA_SCHEMA FEATURE_LOGIN_HISTORY FEATURE_BERANDA_CMS
+    # Default AKTIF (jawaban kosong = ya) — instalasi baru tetap dapat fitur
+    # penuh persis seperti sebelum pilihan ini ada. confirm() bawaan installer
+    # ini default-nya TIDAK, jadi tidak dipakai di sini.
+    ask_feature() {
+        local ans
+        read -rp "$1 [Y/n] " ans
+        [[ ! "$ans" =~ ^[Nn]$ ]]
+    }
+    if ask_feature "Aktifkan GlitchTip (error-tracking)?"; then FEATURE_GLITCHTIP=true; else FEATURE_GLITCHTIP=false; fi
+    if ask_feature "Aktifkan Uptime Kuma (pemantauan uptime)?"; then FEATURE_UPTIME_KUMA=true; else FEATURE_UPTIME_KUMA=false; fi
+    if ask_feature "Aktifkan menu Skema Infrastruktur?"; then FEATURE_INFRA_SCHEMA=true; else FEATURE_INFRA_SCHEMA=false; fi
+    if ask_feature "Aktifkan menu Riwayat Login?"; then FEATURE_LOGIN_HISTORY=true; else FEATURE_LOGIN_HISTORY=false; fi
+    if ask_feature "Aktifkan menu Manajemen Beranda (CMS halaman depan)?"; then FEATURE_BERANDA_CMS=true; else FEATURE_BERANDA_CMS=false; fi
+    if [[ "$FEATURE_GLITCHTIP" == "false" && "$FEATURE_UPTIME_KUMA" == "false" ]]; then
+        log_warn "GlitchTip & Uptime Kuma dua-duanya dimatikan — menu \"Kesehatan Sistem\" ikut disembunyikan, karena isinya memang bersumber dari keduanya."
+    fi
+
+    echo ""
     log_info "=== Backup Postgres otomatis (pg_dump terjadwal) ==="
     local POSTGRES_BACKUP_INTERVAL_SECONDS POSTGRES_BACKUP_RETENTION_DAYS
     POSTGRES_BACKUP_INTERVAL_SECONDS=$(ask "Interval backup (detik)" "86400")
@@ -613,6 +640,39 @@ DASHBOARD_SESSION_SECRET=$DASHBOARD_SESSION_SECRET
 # reCAPTCHA login /admin/login — opsional, dua-duanya kosong = mati.
 RECAPTCHA_SITE_KEY=$RECAPTCHA_SITE_KEY
 RECAPTCHA_SECRET_KEY=$RECAPTCHA_SECRET_KEY
+
+# === Fitur opsional dashboard admin ===
+# false = menu terkait DISEMBUNYIKAN dari sidebar dashboard (termasuk untuk
+# role Superadmin). Ubah nilainya lalu 'docker compose up -d app' — tidak perlu
+# rebuild image maupun instal ulang.
+#
+# Menyembunyikan MENU, bukan mencabut halamannya: alamat halaman terkait masih
+# bisa dibuka langsung. Perlakukan ini sebagai perapian tampilan, BUKAN kontrol
+# akses — pembatasan sesungguhnya tetap lewat role (Superadmin).
+#
+# Variabel yang dihapus/tidak ada dianggap AKTIF, supaya instalasi lama tidak
+# tiba-tiba kehilangan menu setelah upgrade.
+#
+# GlitchTip & Uptime Kuma mengisi menu "Kesehatan Sistem" — kalau KEDUANYA
+# false, menu itu ikut disembunyikan karena isinya memang bersumber dari sana.
+FEATURE_GLITCHTIP=$FEATURE_GLITCHTIP
+FEATURE_UPTIME_KUMA=$FEATURE_UPTIME_KUMA
+FEATURE_INFRA_SCHEMA=$FEATURE_INFRA_SCHEMA
+FEATURE_LOGIN_HISTORY=$FEATURE_LOGIN_HISTORY
+FEATURE_BERANDA_CMS=$FEATURE_BERANDA_CMS
+
+# === Retensi riwayat proses harvest (harvester) ===
+# Riwayat harvest sebelumnya tumbuh selamanya tanpa pembersihan (~2,3 GB/tahun).
+# Job harian 03:00 WIB meringkas harvest_runs ke harvest_daily_summary (disimpan
+# SELAMANYA, dasar grafik tren) lalu membuang baris mentah yang lewat ambang di
+# bawah. Kosongkan/ubah sesuai kebutuhan audit.
+# RETENTION_ENABLED=false mematikan PEMBUANGANNYA saja — peringkasan tetap jalan.
+RETENTION_ENABLED=true
+# Lebih panjang dari rentang terlama chart Analitik (90 hari) — jangan
+# diperpendek di bawah itu, chart membaca tabel mentah ini.
+RETENTION_RUN_DAYS=120
+RETENTION_ENRICH_LOG_DAYS=30
+RETENTION_MEMORY_SAMPLE_DAYS=30
 
 # === Config publik app (runtime, lihat catatan di atas) ===
 APP_ORIGIN=$APP_ORIGIN
