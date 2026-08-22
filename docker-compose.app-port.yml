@@ -13,7 +13,12 @@
 # guard di install.sh). Kalau kamu edit APP_REPLICAS/APP_DIRECT_PORT manual di
 # .env setelahnya, pastikan juga tidak menyalakan APP_DIRECT_PORT bersamaan
 # dengan APP_REPLICAS>1.
+#
+# DEBUG_BIND_HOST: sama seperti docker-compose.ports.yml — default 127.0.0.1
+# supaya port app langsung (yang MEM-BYPASS nginx, termasuk seluruh header
+# keamanan & rate limit di sana) tidak pernah tanpa sengaja terbuka ke LAN.
+# Set DEBUG_BIND_HOST=0.0.0.0 di .env hanya kalau benar-benar diperlukan.
 services:
   app:
     ports:
-      - "${APP_DIRECT_PORT}:3000"
+      - "${DEBUG_BIND_HOST:-127.0.0.1}:${APP_DIRECT_PORT}:3000"

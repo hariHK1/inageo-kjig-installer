@@ -26,27 +26,45 @@
 # Network `debug` (non-internal, dideklarasikan di docker-compose.yml) HANYA
 # menambah jalur publish-ke-host; komunikasi antar-container tetap lewat
 # `cache` seperti biasa, tidak ada yang dilepas dari isolasi defaultnya.
+#
+# ── DEBUG_BIND_HOST: port di bawah diikat ke 127.0.0.1 secara DEFAULT ────
+# Mengikuti pola yang SUDAH dipakai docker-compose.harvester-port.yml. Akses
+# tetap bisa dari mesin lain lewat SSH tunnel, mis:
+#   ssh -L 5444:127.0.0.1:5444 user@server
+#
+# Alasannya konkret, bukan teoretis: scan VA di deployment nyata menemukan
+# PostgreSQL (5444), Elasticsearch (9200), Redis (6380/6381) dan MapProxy
+# (8091) menjawab dari LAN, karena overlay ini dulu mem-publish ke 0.0.0.0.
+# Keempatnya memang berautentikasi (postgres password, ES xpack.security,
+# redis --requirepass) — jadi bukan telanjang — tapi paparan itu tidak
+# dibutuhkan siapa pun dan membuat setiap CVE pada layanan tsb bisa
+# dijangkau dari jarak jauh, plus membuka peluang tebak-password.
+#
+# Kalau memang butuh diakses dari mesin lain (mis. menjalankan harvester
+# lokal yang connect ke ES server ini), isi di .env:
+#   DEBUG_BIND_HOST=0.0.0.0
+# — dan batasi di level firewall/VPN. Jangan pernah ke internet publik.
 services:
   postgres:
     networks:
       - cache
       - debug
     ports:
-      - "${POSTGRES_HOST_PORT:-5432}:5432"
+      - "${DEBUG_BIND_HOST:-127.0.0.1}:${POSTGRES_HOST_PORT:-5432}:5432"
 
   redis:
     networks:
       - cache
       - debug
     ports:
-      - "${REDIS_HOST_PORT:-6379}:6379"
+      - "${DEBUG_BIND_HOST:-127.0.0.1}:${REDIS_HOST_PORT:-6379}:6379"
 
   redis-queue:
     networks:
       - cache
       - debug
     ports:
-      - "${REDIS_QUEUE_HOST_PORT:-6380}:6379"
+      - "${DEBUG_BIND_HOST:-127.0.0.1}:${REDIS_QUEUE_HOST_PORT:-6380}:6379"
 
   # harvester SENGAJA TIDAK di sini (lihat docker-compose.harvester-port.yml)
   # — beda dari postgres/redis/mapproxy di atas (selalu 1 instance, aman pakai
@@ -61,7 +79,7 @@ services:
       - cache
       - debug
     ports:
-      - "${MAPPROXY_HOST_PORT:-8081}:80"
+      - "${DEBUG_BIND_HOST:-127.0.0.1}:${MAPPROXY_HOST_PORT:-8081}:80"
 
   # Dipakai HANYA untuk akses dev (mis. jalankan harvester lokal, connect ke
   # ES server ini) — xpack.security tetap aktif (wajib user+password), tapi
@@ -72,7 +90,7 @@ services:
       - cache
       - debug
     ports:
-      - "${ELASTICSEARCH_HOST_PORT:-9200}:9200"
+      - "${DEBUG_BIND_HOST:-127.0.0.1}:${ELASTICSEARCH_HOST_PORT:-9200}:9200"
 
   # Port app SENGAJA TIDAK di sini (lihat docker-compose.app-port.yml) — file
   # ini pakai fallback "${VAR:-default}" di semua service, artinya walau
