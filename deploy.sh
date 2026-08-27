@@ -446,7 +446,15 @@ action_load_bundle() {
     local pola="${GHCR_REPO:-inageo-kjig}-*.tar.gz"
     local -a temuan=()
     local d f
-    for d in "." "$SCRIPT_DIR" "$HOME" "$HOME/Downloads" "/tmp" "/opt"; do
+    # $HOME saja TIDAK CUKUP: skrip ini lazim dijalankan sebagai root (lihat
+    # menu deploy), dan bagi root $HOME adalah /root — sementara berkas yang
+    # baru di-scp biasanya mendarat di home user biasa (/home/devkjig). Jadi
+    # home user asli ikut disisir: lewat $SUDO_USER kalau lewat sudo, dan
+    # /home/* sebagai jaring terakhir.
+    local -a folder=("." "$SCRIPT_DIR" "$HOME" "$HOME/Downloads" "/tmp" "/opt")
+    [[ -n "${SUDO_USER:-}" && -d "/home/$SUDO_USER" ]] && folder+=("/home/$SUDO_USER" "/home/$SUDO_USER/Downloads")
+    for d in /home/*; do [[ -d "$d" ]] && folder+=("$d"); done
+    for d in "${folder[@]}"; do
         [[ -d "$d" ]] || continue
         # -maxdepth 1: sengaja TIDAK menyisir seluruh isi disk — pada server
         # dgn volume data besar itu bisa memakan waktu lama tanpa alasan.
