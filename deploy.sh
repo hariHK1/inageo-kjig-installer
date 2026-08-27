@@ -547,8 +547,18 @@ action_load_bundle() {
     # --format eksplisit dipakai supaya kolomnya tetap sama di Docker 28+, yang
     # mengubah keluaran bawaan `docker images` (kolom DISK USAGE/CONTENT SIZE).
     echo ""
-    echo "Image yang tersedia secara lokal:"
-    docker images --filter "reference=ghcr.io/*/*"         --format "  {{.Repository}}:{{.Tag}}  ({{.Size}})"
+    # Dibatasi 7 terbaru. Server yang sudah lama berjalan bisa menyimpan
+    # puluhan versi (38 saat ini di server pengguna), dan menumpahkan
+    # semuanya di sini menenggelamkan baris yang justru penting: dua
+    # "Loaded image:" tepat di atasnya. Ini konfirmasi, bukan inventaris —
+    # daftar lengkap & pembersihannya urusan menu 9.
+    local total_img
+    total_img=$(docker images --filter "reference=ghcr.io/*/*" --format "x" 2>/dev/null | wc -l)
+    echo "Image aplikasi di lokal (menampilkan 7 terbaru dari ${total_img}):"
+    docker images --filter "reference=ghcr.io/*/*" --format "  {{.Repository}}:{{.Tag}}  ({{.Size}})" 2>/dev/null | head -7
+    if [[ "$total_img" -gt 7 ]]; then
+        echo "  … dan $((total_img - 7)) versi lain — pakai menu 9 untuk membersihkan yang lama."
+    fi
 }
 
 action_deploy() {
