@@ -833,7 +833,91 @@ action_status() {
 }
 
 action_prune() {
+    # `docker image prune -f` saja TIDAK CUKUP: ia hanya membuang image TANPA
+    # TAG (dangling). Versi lama aplikasi ini semuanya BERTAG
+    # (…-app:v0.2.12-dev dst), jadi tidak pernah tersentuh — terkumpul 38 versi
+    # di server sebelum ketahuan. Menu ini bernama "Bersihkan image lama" tapi
+    # tidak bisa membersihkan yang benar-benar menumpuk.
+    #
+    # Sekarang: tampilkan pemakaian sesungguhnya, lalu tawarkan membuang versi
+    # lama aplikasi ini sambil MENYISAKAN beberapa yang terbaru untuk rollback.
+    echo ""
+    echo "Pemakaian disk Docker:"
+    docker system df
+
+    local pola="ghcr.io/${GHCR_OWNER:-*}/${GHCR_REPO:-*}"
+    local -a tag_urut=()
+    # Diurutkan Docker sendiri menurut waktu pembuatan (terbaru dulu) — bukan
+    # menurut nomor versi. Urutan nomor tidak bisa diandalkan: v0.2.9 dan
+    # v0.2.10 salah urut kalau dibandingkan sebagai teks.
+    while IFS= read -r baris; do
+        [[ -n "$baris" ]] && tag_urut+=("$baris")
+    done < <(docker images --filter "reference=${pola}-app" --filter "reference=${pola}-harvester" \
+                --format '{{.Repository}}:{{.Tag}}' 2>/dev/null)
+
+    if [[ ${#tag_urut[@]} -eq 0 ]]; then
+        log_info "Tidak ada image aplikasi ini di lokal."
+        docker image prune -f
+        return 0
+    fi
+
+    # Kumpulkan daftar VERSI unik, urut sesuai kemunculan (terbaru dulu).
+    local -a versi=()
+    local t v ada u
+    for t in "${tag_urut[@]}"; do
+        v="${t##*:}"
+        ada=0
+        for u in "${versi[@]}"; do [[ "$u" == "$v" ]] && ada=1 && break; done
+        [[ $ada -eq 0 ]] && versi+=("$v")
+    done
+
+    local simpan=3
+    echo ""
+    echo "Ditemukan ${#versi[@]} versi image aplikasi ini."
+    read -rp "Berapa versi TERBARU yang disimpan? [default $simpan]: " n
+    [[ "$n" =~ ^[0-9]+$ ]] && [[ "$n" -ge 1 ]] && simpan="$n"
+
+    local -a buang=()
+    local i=0
+    for v in "${versi[@]}"; do
+        i=$((i + 1))
+        # Versi yang sedang dipakai .env JANGAN PERNAH dibuang, walau posisinya
+        # sudah di luar N terbaru — membuangnya membuat `up -d` mencoba menarik
+        # ulang dari ghcr.io, dan di server tanpa internet itu mematikan stack.
+        if [[ "$v" == "${RELEASE_VERSION:-}" ]]; then
+            continue
+        fi
+        [[ $i -le $simpan ]] && continue
+        buang+=("$v")
+    done
+
+    if [[ ${#buang[@]} -eq 0 ]]; then
+        log_info "Tidak ada versi lama yang perlu dibuang."
+    else
+        echo ""
+        echo "Versi yang akan DIBUANG (${#buang[@]}):"
+        printf '  %s\n' "${buang[@]}"
+        echo "Disimpan: ${simpan} versi terbaru${RELEASE_VERSION:+ + versi aktif ($RELEASE_VERSION)}"
+        if confirm "Lanjut hapus versi di atas?"; then
+            for v in "${buang[@]}"; do
+                # docker rmi menolak sendiri kalau image sedang dipakai
+                # container — jadi tidak perlu pemeriksaan tambahan di sini,
+                # cukup jangan anggap kegagalannya fatal.
+                docker rmi "${pola}-app:$v" "${pola}-harvester:$v" >/dev/null 2>&1 \
+                    && echo "  dibuang: $v" \
+                    || echo "  dilewati: $v (sedang dipakai container atau sudah tidak ada)"
+            done
+        else
+            log_info "Dibatalkan — tidak ada yang dihapus."
+        fi
+    fi
+
+    echo ""
+    log_info "Membuang image tanpa tag (dangling)..."
     docker image prune -f
+    echo ""
+    echo "Pemakaian disk Docker setelah pembersihan:"
+    docker system df
 }
 
 action_scale() {
@@ -1030,7 +1114,7 @@ main_menu() {
         echo "6)  Lihat log (follow)"
         echo "7)  Status (ps)"
         echo "8)  Validasi .env"
-        echo "9)  Bersihkan image lama (docker image prune)"
+        echo "9)  Bersihkan image lama (versi lama aplikasi + image tanpa tag)"
         echo "10) Scale app (ganti jumlah replica)"
         echo "11) Perbarui sertifikat TLS (manual)"
         echo "12) Uji config nginx (nginx -t)"
