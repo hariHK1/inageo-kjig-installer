@@ -864,6 +864,13 @@ action_prune() {
     # Diurutkan Docker sendiri menurut waktu pembuatan (terbaru dulu) — bukan
     # menurut nomor versi. Urutan nomor tidak bisa diandalkan: v0.2.9 dan
     # v0.2.10 salah urut kalau dibandingkan sebagai teks.
+    #
+    # Yang dikumpulkan REFERENSI PENUH (repo:tag), bukan cuma nomor versinya.
+    # Itu yang nanti diberikan apa adanya ke `docker rmi`. Merangkai ulang nama
+    # dari pola adalah bug yang baru saja diperbaiki: `docker images --filter`
+    # menerima glob `*`, sedangkan `docker rmi` TIDAK — ia memperlakukan `*`
+    # sebagai nama harfiah, sehingga setiap penghapusan gagal dan dilaporkan
+    # keliru sebagai "sedang dipakai container".
     while IFS= read -r baris; do
         [[ -n "$baris" ]] && tag_urut+=("$baris")
     done < <(docker images --filter "reference=${pola}-app" --filter "reference=${pola}-harvester" \
@@ -913,13 +920,23 @@ action_prune() {
         printf '  %s\n' "${buang[@]}"
         echo "Disimpan: ${simpan} versi terbaru${RELEASE_VERSION:+ + versi aktif ($RELEASE_VERSION)}"
         if confirm "Lanjut hapus versi di atas?"; then
+            local ref galat
             for v in "${buang[@]}"; do
-                # docker rmi menolak sendiri kalau image sedang dipakai
-                # container — jadi tidak perlu pemeriksaan tambahan di sini,
-                # cukup jangan anggap kegagalannya fatal.
-                docker rmi "${pola}-app:$v" "${pola}-harvester:$v" >/dev/null 2>&1 \
-                    && echo "  dibuang: $v" \
-                    || echo "  dilewati: $v (sedang dipakai container atau sudah tidak ada)"
+                # Referensi diambil dari daftar NYATA hasil `docker images`,
+                # tidak dirangkai dari pola — lihat catatan di pengumpulan.
+                for ref in "${tag_urut[@]}"; do
+                    [[ "${ref##*:}" == "$v" ]] || continue
+                    if galat=$(docker rmi "$ref" 2>&1); then
+                        echo "  dibuang: $ref"
+                    else
+                        # Error ASLI ditampilkan, bukan tebakan. Sebelumnya
+                        # semua kegagalan dilaporkan sebagai "sedang dipakai
+                        # container", padahal sebab sesungguhnya bisa apa saja
+                        # — dan itu menyembunyikan bug di perintahnya sendiri.
+                        echo "  gagal  : $ref"
+                        echo "           $(echo "$galat" | head -1)"
+                    fi
+                done
             done
         else
             log_info "Dibatalkan — tidak ada yang dihapus."
@@ -1152,7 +1169,7 @@ main_menu() {
             6) action_logs ;;
             7) action_status ;;
             8) check_env ;;
-            9) confirm "Hapus image docker lama yang tidak terpakai (dangling)?" && action_prune ;;
+            9) check_env && action_prune ;;
             10) check_env && action_scale ;;
             11) check_env && action_renew_tls ;;
             12) action_test_nginx ;;
