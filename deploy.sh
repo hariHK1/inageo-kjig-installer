@@ -538,24 +538,6 @@ action_load_bundle() {
         log_warn "Tidak bisa membaca versi dari keluaran docker load — samakan RELEASE_VERSION di .env secara manual."
     fi
 
-    # PULL_MODE ikut ditawarkan di sini. Memuat bundle itu SENDIRI sudah
-    # pernyataan "server ini tidak menarik dari ghcr.io" — tapi menu Deploy
-    # membaca PULL_MODE, yang bawaannya `true` kalau tidak diisi. Akibatnya
-    # Deploy tetap menjalankan `docker login ghcr.io` dan meminta token
-    # GitHub, lalu menarik ulang image yang barusan dimuat — seluruh kerja
-    # memindahkan bundle jadi sia-sia (dilaporkan pengguna).
-    if [[ "${PULL_MODE:-true}" != "false" ]]; then
-        echo ""
-        log_warn "PULL_MODE saat ini '${PULL_MODE:-true}' — menu Deploy masih akan menarik dari ghcr.io & meminta token GitHub."
-        if confirm "Setel PULL_MODE=false supaya Deploy memakai image yang barusan dimuat?"; then
-            env_set_kv PULL_MODE false
-            export PULL_MODE=false
-            log_ok "PULL_MODE=false — Deploy tidak akan menyentuh ghcr.io lagi."
-        else
-            log_warn "Dibiarkan — siapkan token GitHub, atau ubah PULL_MODE=false di .env sebelum Deploy."
-        fi
-    fi
-
     log_info "Selanjutnya: menu \"Deploy\" (image tidak akan ditarik ulang selama tag itu sudah ada lokal)."
     # Pola "ghcr.io/*" TIDAK PERNAH cocok: tanda * pada filter reference Docker
     # tidak melintasi garis miring, sedangkan nama image kita dua segmen
@@ -583,13 +565,52 @@ action_load_bundle() {
     fi
 }
 
-action_deploy() {
-    if [[ "${PULL_MODE:-true}" == "true" ]]; then
-        action_pull || return 1
-    else
-        log_warn "PULL_MODE=false — melewati pull, asumsi image sudah dimuat lewat \"Load image dari bundle\". Kalau belum, batalkan dan jalankan menu itu dulu."
-        confirm "Lanjut deploy dengan image yang sudah ada secara lokal?" || return 1
+# Pastikan image untuk $1 (versi) siap dipakai. $2="app" = app saja.
+#
+# KEPUTUSANNYA DARI KENYATAAN, bukan dari flag. Sebelumnya jalur ini dipilih
+# lewat PULL_MODE di .env — dan itu sumber kebingungan yang nyata: pengguna
+# sudah memuat bundle secara offline, tapi Deploy tetap meminta token GitHub
+# karena PULL_MODE bawaannya `true`. Seluruh kerja memindahkan bundle 139 MB
+# jadi sia-sia, dan sebabnya tidak terlihat di mana pun.
+#
+# Sekarang skrip memeriksa sendiri apakah image versi itu SUDAH ADA di daemon:
+#   ada    -> tawarkan dua pilihan, offline sebagai bawaan
+#   belum  -> tidak ada yang bisa ditawarkan, langsung tarik dari ghcr.io
+#
+# Tidak ada lagi yang perlu diatur di .env untuk ini.
+siapkan_image() {
+    local versi="$1" cakupan="${2:-semua}"
+    local dasar="ghcr.io/${GHCR_OWNER}/${GHCR_REPO}"
+    local -a butuh=("${dasar}-app:${versi}")
+    [[ "$cakupan" != "app" ]] && butuh+=("${dasar}-harvester:${versi}")
+
+    local ref lengkap=true
+    for ref in "${butuh[@]}"; do
+        docker image inspect "$ref" >/dev/null 2>&1 || lengkap=false
+    done
+
+    if [[ "$lengkap" != "true" ]]; then
+        log_info "Image versi $versi belum ada di server ini — menarik dari ghcr.io."
+        if [[ "$cakupan" == "app" ]]; then action_pull_app; else action_pull; fi
+        return $?
     fi
+
+    echo ""
+    echo "Image versi $versi SUDAH ADA di server ini."
+    echo "  1) Offline — pakai image yang sudah ada (tanpa ghcr.io, tanpa token)"
+    echo "  2) Tarik ulang dari ghcr.io (butuh akses internet & token GitHub)"
+    local pilih
+    read -rp "Pilih [default 1]: " pilih
+    if [[ "$pilih" == "2" ]]; then
+        if [[ "$cakupan" == "app" ]]; then action_pull_app; else action_pull; fi
+        return $?
+    fi
+    log_ok "Mode offline — memakai image lokal versi $versi."
+    return 0
+}
+
+action_deploy() {
+    siapkan_image "${RELEASE_VERSION}" || return 1
     ensure_nginx_conf
     # Deploy penuh berarti harvester kembali jadi milik stack ini — cabut
     # penanda "dikelola pihak lain" supaya keterangan di halaman admin tidak
@@ -736,12 +757,7 @@ action_deploy_app_only() {
     # ditelusuri daripada dicegah di sini.
     verify_app_only_env || return 1
 
-    if [[ "${PULL_MODE:-true}" == "true" ]]; then
-        action_pull_app || return 1
-    else
-        log_warn "PULL_MODE=false — melewati pull, asumsi image app sudah dimuat lewat \"Load image dari bundle\"."
-        confirm "Lanjut deploy dengan image yang sudah ada secara lokal?" || return 1
-    fi
+    siapkan_image "${RELEASE_VERSION}" app || return 1
 
     ensure_nginx_conf
     ensure_minio_credentials
@@ -824,12 +840,7 @@ action_set_version() {
     fi
     export RELEASE_VERSION="$new_version"
     log_info "Pindah ke versi $new_version..."
-    if [[ "${PULL_MODE:-true}" == "true" ]]; then
-        action_pull || return 1
-    else
-        log_warn "PULL_MODE=false — pastikan sudah 'Load image dari bundle' untuk tag $new_version SEBELUM lanjut, kalau belum batalkan dulu."
-        confirm "Image untuk versi $new_version sudah dimuat lokal, lanjutkan?" || return 1
-    fi
+    siapkan_image "$new_version" || return 1
     $COMPOSE_CMD up -d --no-deps --force-recreate app harvester
     $COMPOSE_CMD ps
     action_harvester_migrate || log_warn "Migrasi otomatis gagal — jalankan manual lewat menu 14."
