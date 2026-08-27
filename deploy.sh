@@ -824,21 +824,46 @@ action_seed_admin() {
     unset admin_password_confirm
 
     local admin_role role_sel
-    echo "1) Superadmin (akses penuh)  2) Admin (dibatasi — tanpa Riwayat Login, Skema Infrastruktur, Log Perubahan, & link Ops)"
-    read -rp "Role akun [default 1]: " role_sel
+    echo "1) Superadmin (akses penuh — MAKSIMAL 1 akun di seluruh sistem)"
+    echo "2) Admin (dibatasi — tanpa Riwayat Login, Skema Infrastruktur, Log Perubahan, & link Ops)"
+    # Default sengaja ADMIN, bukan superadmin. Sebelumnya menekan Enter
+    # langsung membuat superadmin — pilihan paling berbahaya dijadikan
+    # perilaku paling mudah. Yang berwenang mengangkat superadmin pasti
+    # sadar sedang melakukannya; yang sekadar membuat akun operasional
+    # tidak boleh mendapatkannya karena salah pencet.
+    read -rp "Role akun [default 2 = Admin]: " role_sel
     case "$role_sel" in
-        2) admin_role="admin" ;;
-        *) admin_role="superadmin" ;;
+        1) admin_role="superadmin" ;;
+        *) admin_role="admin" ;;
     esac
 
+    # Mengangkat/mengganti superadmin menuntut password superadmin yang AKTIF —
+    # akses server saja tidak cukup. Kalau belum ada superadmin sama sekali
+    # (deployment baru), script seed melewatkan verifikasi ini sendiri, jadi
+    # isian di bawah boleh dikosongkan.
+    local admin_verify=""
+    if [[ "$admin_role" == "superadmin" ]]; then
+        echo ""
+        log_warn "Superadmin dibatasi 1 akun. Mengangkat/mengganti superadmin menuntut password superadmin yang aktif."
+        read -rsp "Password superadmin yang aktif (kosongkan kalau belum ada superadmin sama sekali): " admin_verify
+        echo ""
+    fi
+
+    # Menimpa akun yang username-nya sudah terdaftar WAJIB disengaja — tanpa
+    # ini, script menolak dan tidak mengubah apa pun.
+    local admin_reset="false"
+    if confirm "Kalau email ini SUDAH terdaftar, timpa akun yang ada (password & role diganti)?"; then
+        admin_reset="true"
+    fi
+
     log_info "Membuat/reset akun admin \"$admin_username\" (role: $admin_role)..."
-    $COMPOSE_CMD run --rm -e INITIAL_ADMIN_USERNAME="$admin_username" -e INITIAL_ADMIN_PASSWORD="$admin_password" -e INITIAL_ADMIN_ROLE="$admin_role" harvester node dist/scripts/seed-admin-user.js
+    $COMPOSE_CMD run --rm         -e INITIAL_ADMIN_USERNAME="$admin_username"         -e INITIAL_ADMIN_PASSWORD="$admin_password"         -e INITIAL_ADMIN_ROLE="$admin_role"         -e INITIAL_ADMIN_VERIFY_PASSWORD="$admin_verify"         -e INITIAL_ADMIN_RESET="$admin_reset"         harvester node dist/scripts/seed-admin-user.js
     local result=$?
-    unset admin_password admin_username admin_role
+    unset admin_password admin_username admin_role admin_verify admin_reset
     if [[ $result -eq 0 ]]; then
         log_ok "Akun admin siap dipakai login dashboard."
     else
-        log_error "Seed admin gagal — pastikan migrasi (menu 14) sudah dijalankan lebih dulu."
+        log_error "Seed admin gagal — baca pesan di atas. Sebab tersering: email sudah terdaftar, password superadmin salah, atau migrasi (menu 14) belum dijalankan."
         return 1
     fi
 }
