@@ -539,7 +539,16 @@ action_load_bundle() {
     fi
 
     log_info "Selanjutnya: menu \"Deploy\" (image tidak akan ditarik ulang selama tag itu sudah ada lokal)."
-    docker images --filter "reference=ghcr.io/*"
+    # Pola "ghcr.io/*" TIDAK PERNAH cocok: tanda * pada filter reference Docker
+    # tidak melintasi garis miring, sedangkan nama image kita dua segmen
+    # (ghcr.io/<owner>/<repo>-app). Akibatnya tabelnya selalu kosong — terlihat
+    # seperti image gagal dimuat padahal berhasil (dilaporkan pengguna).
+    #
+    # --format eksplisit dipakai supaya kolomnya tetap sama di Docker 28+, yang
+    # mengubah keluaran bawaan `docker images` (kolom DISK USAGE/CONTENT SIZE).
+    echo ""
+    echo "Image yang tersedia secara lokal:"
+    docker images --filter "reference=ghcr.io/*/*"         --format "  {{.Repository}}:{{.Tag}}  ({{.Size}})"
 }
 
 action_deploy() {
