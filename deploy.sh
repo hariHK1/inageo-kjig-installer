@@ -433,18 +433,104 @@ action_pull() {
 # lokal — jadi urutan yang benar: load bundle DULU, baru isi/cocokkan
 # RELEASE_VERSION di .env, baru "Deploy".
 action_load_bundle() {
-    read -rp "Path file bundle image (.tar.gz, hasil download dari GitHub Release): " bundle_path
+    # Bundle DICARI OTOMATIS, tidak lagi menuntut pengguna mengetik path.
+    # Sebelumnya satu-satunya cara adalah mengetik path lengkap berkas yang
+    # baru saja diunduh — membingungkan, dan gampang salah ketik justru saat
+    # sedang memulihkan sistem. Sekarang folder yang lazim dipakai disisir,
+    # hasilnya ditampilkan bernomor, dan mengetik path tetap tersedia sebagai
+    # jalan keluar kalau berkasnya ada di tempat lain.
+    # Pola DIPERSEMPIT ke nama bundle kita sendiri. Menyisir '*.tar.gz' polos
+    # ikut memunguti arsip tak terkait di folder unduhan — diuji nyata: 3 dari
+    # 5 hasilnya milik aplikasi lain. Daftar penuh berkas asing membuat
+    # pengguna harus memilah, persis beban yang ingin dihilangkan menu ini.
+    local pola="${GHCR_REPO:-inageo-kjig}-*.tar.gz"
+    local -a temuan=()
+    local d f
+    for d in "." "$SCRIPT_DIR" "$HOME" "$HOME/Downloads" "/tmp" "/opt"; do
+        [[ -d "$d" ]] || continue
+        # -maxdepth 1: sengaja TIDAK menyisir seluruh isi disk — pada server
+        # dgn volume data besar itu bisa memakan waktu lama tanpa alasan.
+        while IFS= read -r f; do
+            [[ -n "$f" ]] && temuan+=("$f")
+        done < <(find "$d" -maxdepth 1 -name "$pola" -type f 2>/dev/null | head -20)
+    done
+
+    # Buang duplikat (mis. "." dan $SCRIPT_DIR menunjuk folder yang sama).
+    local -a unik=()
+    local t u ada
+    for t in "${temuan[@]}"; do
+        ada=0
+        for u in "${unik[@]}"; do [[ "$(readlink -f "$t")" == "$(readlink -f "$u")" ]] && ada=1 && break; done
+        [[ $ada -eq 0 ]] && unik+=("$t")
+    done
+
+    local bundle_path=""
+    if [[ ${#unik[@]} -gt 0 ]]; then
+        echo ""
+        echo "Bundle yang ditemukan:"
+        local i=1 ukuran_kb tanda
+        for t in "${unik[@]}"; do
+            # Bundle sungguhan berukuran ratusan MB. Yang jauh lebih kecil hampir
+            # pasti unduhan terputus — ditemukan nyata saat menguji ini (berkas
+            # 3,1 MB untuk bundle yang seharusnya ~137 MB). Ditandai supaya tidak
+            # terlanjur dipilih lalu gagal di tengah docker load.
+            ukuran_kb=$(du -k "$t" 2>/dev/null | cut -f1)
+            tanda=""
+            [[ -n "$ukuran_kb" && "$ukuran_kb" -lt 51200 ]] && tanda="  <- terlalu kecil, kemungkinan unduhan terputus"
+            printf "  %d) %s  (%s)%s\n" "$i" "$t" "$(du -h "$t" 2>/dev/null | cut -f1)" "$tanda"
+            i=$((i + 1))
+        done
+        echo "  0) Ketik path sendiri"
+        local pilih
+        read -rp "Pilih bundle [default 1]: " pilih
+        pilih="${pilih:-1}"
+        if [[ "$pilih" =~ ^[0-9]+$ ]] && [[ "$pilih" -ge 1 ]] && [[ "$pilih" -le ${#unik[@]} ]]; then
+            bundle_path="${unik[$((pilih - 1))]}"
+        fi
+    fi
+
+    if [[ -z "$bundle_path" ]]; then
+        read -rp "Path file bundle (.tar.gz dari halaman GitHub Release): " bundle_path
+    fi
+
     if [[ ! -f "$bundle_path" ]]; then
         log_error "File '$bundle_path' tidak ditemukan."
         return 1
     fi
+
     log_info "Memuat image dari $bundle_path (bisa beberapa menit tergantung ukuran)..."
+    local out
     if [[ "$bundle_path" == *.gz ]]; then
-        gunzip -c "$bundle_path" | docker load || { log_error "Gagal load image."; return 1; }
+        out=$(gunzip -c "$bundle_path" | docker load 2>&1) || { log_error "Gagal load image:"; echo "$out"; return 1; }
     else
-        docker load -i "$bundle_path" || { log_error "Gagal load image."; return 1; }
+        out=$(docker load -i "$bundle_path" 2>&1) || { log_error "Gagal load image:"; echo "$out"; return 1; }
     fi
-    log_ok "Image dimuat. Pastikan RELEASE_VERSION di .env SAMA dengan tag bundle ini (lihat nama file/tag Release-nya), baru lanjut menu \"Deploy\" — image tidak akan di-pull ulang selama tag itu sudah ada lokal."
+    echo "$out"
+
+    # Versi diambil dari keluaran `docker load` ("Loaded image: ...:v0.2.68-dev")
+    # — bukan dari nama berkas, yang bisa saja diganti orang saat mentransfer.
+    # Ini menutup jebakan kedua jalur ini: RELEASE_VERSION di .env yang tidak
+    # sama dgn tag bundle membuat compose diam-diam mencoba menarik dari
+    # ghcr.io, dan di server tanpa internet itu gagal tanpa sebab yang jelas.
+    local tag_versi
+    tag_versi=$(echo "$out" | grep -oE 'Loaded image: [^ ]+:[^ ]+' | head -1 | sed 's/.*://')
+    if [[ -n "$tag_versi" ]]; then
+        log_ok "Image dimuat — versi: $tag_versi"
+        if [[ "${RELEASE_VERSION:-}" != "$tag_versi" ]]; then
+            log_warn "RELEASE_VERSION di .env saat ini: '${RELEASE_VERSION:-kosong}' — BEDA dgn bundle."
+            if confirm "Samakan RELEASE_VERSION ke $tag_versi sekarang?"; then
+                env_set_kv RELEASE_VERSION "$tag_versi"
+                export RELEASE_VERSION="$tag_versi"
+                log_ok "RELEASE_VERSION diatur ke $tag_versi."
+            else
+                log_warn "Dibiarkan berbeda — deploy akan mencoba menarik image dari ghcr.io, dan itu gagal di server tanpa internet."
+            fi
+        fi
+    else
+        log_warn "Tidak bisa membaca versi dari keluaran docker load — samakan RELEASE_VERSION di .env secara manual."
+    fi
+
+    log_info "Selanjutnya: menu \"Deploy\" (image tidak akan ditarik ulang selama tag itu sudah ada lokal)."
     docker images --filter "reference=ghcr.io/*"
 }
 
