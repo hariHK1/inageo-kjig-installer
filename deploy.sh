@@ -538,6 +538,24 @@ action_load_bundle() {
         log_warn "Tidak bisa membaca versi dari keluaran docker load — samakan RELEASE_VERSION di .env secara manual."
     fi
 
+    # PULL_MODE ikut ditawarkan di sini. Memuat bundle itu SENDIRI sudah
+    # pernyataan "server ini tidak menarik dari ghcr.io" — tapi menu Deploy
+    # membaca PULL_MODE, yang bawaannya `true` kalau tidak diisi. Akibatnya
+    # Deploy tetap menjalankan `docker login ghcr.io` dan meminta token
+    # GitHub, lalu menarik ulang image yang barusan dimuat — seluruh kerja
+    # memindahkan bundle jadi sia-sia (dilaporkan pengguna).
+    if [[ "${PULL_MODE:-true}" != "false" ]]; then
+        echo ""
+        log_warn "PULL_MODE saat ini '${PULL_MODE:-true}' — menu Deploy masih akan menarik dari ghcr.io & meminta token GitHub."
+        if confirm "Setel PULL_MODE=false supaya Deploy memakai image yang barusan dimuat?"; then
+            env_set_kv PULL_MODE false
+            export PULL_MODE=false
+            log_ok "PULL_MODE=false — Deploy tidak akan menyentuh ghcr.io lagi."
+        else
+            log_warn "Dibiarkan — siapkan token GitHub, atau ubah PULL_MODE=false di .env sebelum Deploy."
+        fi
+    fi
+
     log_info "Selanjutnya: menu \"Deploy\" (image tidak akan ditarik ulang selama tag itu sudah ada lokal)."
     # Pola "ghcr.io/*" TIDAK PERNAH cocok: tanda * pada filter reference Docker
     # tidak melintasi garis miring, sedangkan nama image kita dua segmen
