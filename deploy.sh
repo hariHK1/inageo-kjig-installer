@@ -46,6 +46,28 @@ load_env_file() {
         elif [[ "$value" =~ ^\'(.*)\'$ ]]; then
             value="${BASH_REMATCH[1]}"
         fi
+        # COMPOSE_FILE yang KOSONG harus benar-benar tidak ada, bukan diexport
+        # sebagai string kosong.
+        #
+        # Docker Compose memperlakukan COMPOSE_FILE="" sebagai daftar berisi
+        # SATU path kosong, dan path kosong itu diterjemahkan jadi direktori
+        # proyek. Akibatnya `docker compose pull` gagal dgn:
+        #
+        #     read /home/<user>/inageo-kjig-installer: is a directory
+        #
+        # Pesan itu tidak menyebut COMPOSE_FILE sama sekali, jadi terbaca
+        # seolah image atau kredensialnya yang bermasalah — `docker pull`
+        # manual untuk image yang sama justru berhasil. Terjadi nyata di
+        # server produksi, dan baru ketahuan setelah COMPOSE_FILE DIISI
+        # ternyata malah membuatnya normal.
+        #
+        # Meng-unset membuatnya berperilaku seperti variabel yang memang tidak
+        # pernah ada: Compose memakai penemuan berkas bawaannya
+        # (docker-compose.yml + docker-compose.override.yml kalau ada).
+        if [[ "$key" == "COMPOSE_FILE" && -z "$value" ]]; then
+            unset COMPOSE_FILE
+            continue
+        fi
         export "$key=$value"
     done < "$file"
 }
@@ -166,6 +188,8 @@ check_env() {
     if [[ -z "${MINIO_ENDPOINT:-}" ]]; then
         log_info "MINIO_ENDPOINT kosong — preview dokumen via MinIO nonaktif (503, sudah di-handle app)."
     fi
+    # Kosong sudah di-unset di load_env (lihat catatan di sana), jadi begitu
+    # blok ini tercapai COMPOSE_FILE pasti berisi sesuatu yang nyata.
     if [[ -n "${COMPOSE_FILE:-}" ]]; then
         log_warn "COMPOSE_FILE aktif ('$COMPOSE_FILE') — port infra/app langsung ke host TEREXPOSE. Pastikan ini memang disengaja (bukan server produksi publik)."
 
