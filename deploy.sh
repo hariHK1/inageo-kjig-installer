@@ -168,6 +168,32 @@ check_env() {
     fi
     if [[ -n "${COMPOSE_FILE:-}" ]]; then
         log_warn "COMPOSE_FILE aktif ('$COMPOSE_FILE') — port infra/app langsung ke host TEREXPOSE. Pastikan ini memang disengaja (bukan server produksi publik)."
+
+        # Tiap entri WAJIB berkas yang benar-benar ada. Kalau salah satunya
+        # ternyata DIREKTORI (mis. tanpa sengaja diisi path folder installer),
+        # docker compose gagal dgn "read <path>: is a directory" — pesan yang
+        # tidak menyebut COMPOSE_FILE sama sekali, sehingga terbaca seolah
+        # image-nya yang bermasalah. Terjadi nyata di lapangan.
+        local pemisah="${COMPOSE_PATH_SEPARATOR:-:}"
+        local berkas rusak=0
+        local IFS_LAMA="$IFS"
+        IFS="$pemisah"
+        for berkas in $COMPOSE_FILE; do
+            [[ -z "$berkas" ]] && continue
+            if [[ -d "$berkas" ]]; then
+                log_error "COMPOSE_FILE memuat DIREKTORI, bukan berkas: '$berkas'"
+                rusak=1
+            elif [[ ! -f "$berkas" ]]; then
+                log_error "COMPOSE_FILE menunjuk berkas yang tidak ada: '$berkas'"
+                rusak=1
+            fi
+        done
+        IFS="$IFS_LAMA"
+        if [[ "$rusak" == "1" ]]; then
+            log_error "Perbaiki COMPOSE_FILE di .env — isinya daftar NAMA BERKAS dipisah '$pemisah', mis:"
+            log_error "  COMPOSE_FILE=docker-compose.yml${pemisah}docker-compose.ports.yml"
+            return 1
+        fi
     fi
 
     log_ok "Validasi .env selesai."
@@ -417,7 +443,11 @@ action_pull() {
     docker logout ghcr.io >/dev/null 2>&1 || true
 
     if [[ "$pull_rc" != "0" ]]; then
-        log_error "Pull gagal — cek RELEASE_VERSION di .env memang sudah dirilis (lihat tab Releases repo source)."
+        log_error "Pull gagal. Baca pesan Docker di atas — sebab tersering:"
+        log_error "  • RELEASE_VERSION belum dirilis (cek tab Releases repo source)"
+        log_error "  • COMPOSE_FILE memuat entri yang bukan berkas ('is a directory')"
+        log_error "  • token GitHub tidak berhak membaca package (butuh scope read:packages)"
+        log_error "Kalau server ini memang tanpa akses ghcr.io, pakai menu \"Load image dari bundle\"."
         return 1
     fi
     log_ok "Image ter-pull. Kredensial ghcr.io sudah dihapus lagi dari server."
