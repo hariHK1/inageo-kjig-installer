@@ -78,6 +78,24 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
+# COMPOSE_FILE yang KOSONG tapi terdefinisi harus dibuang SEBELUM perintah
+# compose mana pun dijalankan.
+#
+# Compose memperlakukan COMPOSE_FILE="" sebagai daftar berisi satu path kosong,
+# dan path kosong itu jadi direktori proyek — setiap perintah compose gagal dgn
+# "read <dir>: is a directory", pesan yang tidak menyebut COMPOSE_FILE sama
+# sekali.
+#
+# Pembersihan di load_env() saja TIDAK CUKUP: itu hanya berjalan kalau .env
+# memang memuat kunci COMPOSE_FILE. Kalau nilai kosong itu diwarisi dari
+# ENVIRONMENT SHELL — profil login, /etc/environment, atau export manual di
+# sesi sebelumnya — loader tidak pernah melihatnya, sementara Compose tetap
+# terpengaruh. Terjadi nyata di server produksi: `docker compose exec` yang
+# diketik langsung di shell pun ikut gagal, di luar skrip ini.
+if [[ -v COMPOSE_FILE && -z "${COMPOSE_FILE}" ]]; then
+    unset COMPOSE_FILE
+fi
+
 if docker compose version >/dev/null 2>&1; then
     COMPOSE_CMD="docker compose"
 elif command -v docker-compose >/dev/null 2>&1; then
