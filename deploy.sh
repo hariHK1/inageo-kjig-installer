@@ -274,9 +274,41 @@ check_env() {
     return 0
 }
 
+# Diisi ensure_nginx_conf kalau ia benar-benar menulis ulang default.conf,
+# supaya pemanggilnya tahu nginx perlu dimuat ulang. Tanpa penanda ini,
+# `up -d` biasa TIDAK memuat ulang nginx — berkas config-nya bind-mount, jadi
+# definisi service-nya tidak berubah dan Compose menganggap tidak ada apa-apa.
+NGINX_CONF_BERUBAH=0
+NGINX_CONF_BACKUP=""
+
 ensure_nginx_conf() {
+    # Cap APP_BASE_PATH yang dipakai saat default.conf ini DIHASILKAN.
+    #
+    # KENAPA PERLU DICAP, tidak cukup "kalau berkasnya ada, biarkan". nginx dan
+    # image app WAJIB sepakat soal sub-path: nginx melayani di root sementara
+    # image varian /peta = 404 di mana-mana. Menu "Ganti versi" hanya
+    # me-recreate app+harvester dan tidak pernah menyentuh nginx, jadi tanpa
+    # pemeriksaan ini mengubah APP_BASE_PATH lalu upgrade akan MEMATIKAN situs
+    # tanpa satu pun peringatan.
+    #
+    # Config yang dihasilkan SEBELUM fitur sub-path ada tidak punya baris cap
+    # sama sekali; itu terbaca sebagai cap kosong, yang memang sama artinya
+    # dgn "dipasang di root". Instalasi lama karena itu tidak tersentuh.
+    local cap_diminta="${APP_BASE_PATH:-}"
+    local cap_terpasang=""
     if [[ -f "$NGINX_CONF" ]]; then
-        return 0
+        cap_terpasang="$(sed -n 's/^# deploy\.sh:APP_BASE_PATH=\(.*\)$//p' "$NGINX_CONF" | head -1)"
+        if [[ "$cap_terpasang" == "$cap_diminta" ]]; then
+            return 0
+        fi
+        # Selalu dicadangkan dulu — berkas ini boleh saja sudah disunting
+        # tangan (blok tambahan, tuning). Menulis ulang tanpa cadangan berarti
+        # menghapus pekerjaan orang lain diam-diam.
+        NGINX_CONF_BACKUP="${NGINX_CONF}.bak-$(date +%Y%m%d-%H%M%S)"
+        cp "$NGINX_CONF" "$NGINX_CONF_BACKUP"
+        log_warn "APP_BASE_PATH berubah: '${cap_terpasang:-<root>}' -> '${cap_diminta:-<root>}'. nginx/conf.d/default.conf ditulis ulang."
+        log_warn "Config lama dicadangkan ke: $NGINX_CONF_BACKUP"
+        log_warn "Kalau berkas lama itu pernah disunting tangan, pindahkan suntingannya ke config baru."
     fi
 
     local template="$NGINX_CONF_EXAMPLE"
@@ -285,6 +317,11 @@ ensure_nginx_conf() {
     fi
 
     sed "s/__DOMAIN__/$DOMAIN/g" "$template" > "$NGINX_CONF"
+    NGINX_CONF_BERUBAH=1
+
+    # Cap di baris PERTAMA, dibaca lagi di pemanggilan berikutnya (lihat awal
+    # fungsi). Sengaja berupa komentar nginx supaya tidak mempengaruhi apa pun.
+    sed -i "1i # deploy.sh:APP_BASE_PATH=${APP_BASE_PATH:-}" "$NGINX_CONF"
 
     # __BASE_PATH__ dipakai '|' sebagai pemisah sed, BUKAN '/' — nilainya
     # sendiri memuat garis miring ('/peta'), yang akan mengakhiri perintah sed
@@ -783,6 +820,7 @@ action_deploy() {
     fi
     log_info "Deploying (up -d)..."
     $COMPOSE_CMD up -d
+    muat_ulang_nginx_kalau_perlu || log_warn "nginx belum memakai config baru — lihat pesan di atas."
     $COMPOSE_CMD ps
     # postgres tidak punya healthcheck (lihat docker-compose.yml) — jeda
     # singkat sebelum migrasi supaya tidak race dgn startup-nya. Kalau
@@ -931,6 +969,7 @@ action_deploy_app_only() {
     # SENGAJA tanpa migrasi database — skema Postgres itu milik harvester,
     # dan di mode ini harvester bukan tanggung jawab stack ini lagi.
     $COMPOSE_CMD up -d $APP_ONLY_SERVICES || return 1
+    muat_ulang_nginx_kalau_perlu || log_warn "nginx belum memakai config baru — lihat pesan di atas."
     $COMPOSE_CMD ps
     log_ok "App aktif. Harvester TIDAK disentuh oleh menu ini."
     log_info "Kalau harvester lama masih jalan di server ini, matikan lewat menu 21."
@@ -979,6 +1018,32 @@ action_down_harvester() {
 }
 
 
+# Muat ulang nginx HANYA kalau ensure_nginx_conf benar-benar menulis ulang
+# config. `up -d` biasa tidak cukup: default.conf itu bind-mount, definisi
+# service-nya tidak berubah, jadi Compose membiarkan container lama jalan
+# dengan config lama di memori.
+muat_ulang_nginx_kalau_perlu() {
+    [[ "$NGINX_CONF_BERUBAH" == "1" ]] || return 0
+
+    if ! $COMPOSE_CMD ps --services --filter status=running 2>/dev/null | grep -qx nginx; then
+        $COMPOSE_CMD up -d --no-deps nginx
+        return 0
+    fi
+
+    # Diuji DULU, baru dimuat ulang. Kalau config baru ternyata tidak valid,
+    # `nginx -s reload` akan ditolak dan proses lama tetap jalan — tapi
+    # operatornya tidak akan tahu ada yang salah. Menguji lebih dulu membuat
+    # kegagalan itu terucap, dan situsnya tetap hidup dgn config lama.
+    if $COMPOSE_CMD exec -T nginx nginx -t; then
+        $COMPOSE_CMD exec -T nginx nginx -s reload
+        log_ok "nginx dimuat ulang dengan konfigurasi baru."
+    else
+        log_error "Konfigurasi nginx baru TIDAK valid — TIDAK dimuat ulang, nginx tetap jalan dgn config lama."
+        [[ -n "$NGINX_CONF_BACKUP" ]] && log_error "Cadangan config sebelumnya: $NGINX_CONF_BACKUP"
+        return 1
+    fi
+}
+
 action_set_version() {
     local current="${RELEASE_VERSION:-(belum diset)}"
     log_info "Versi saat ini: $current"
@@ -995,7 +1060,14 @@ action_set_version() {
     export RELEASE_VERSION="$new_version"
     log_info "Pindah ke versi $new_version..."
     siapkan_image "$new_version" || return 1
+
+    # nginx ikut diperiksa DI SINI, bukan cuma di action_deploy. Menu ini dulu
+    # hanya menyentuh app+harvester, sehingga mengubah APP_BASE_PATH lalu
+    # upgrade lewat menu ini akan menghasilkan nginx yang melayani di root
+    # sementara image-nya varian sub-path — situs mati total, tanpa peringatan.
+    ensure_nginx_conf
     $COMPOSE_CMD up -d --no-deps --force-recreate app harvester
+    muat_ulang_nginx_kalau_perlu || log_warn "nginx belum memakai config baru — lihat pesan di atas."
     $COMPOSE_CMD ps
     action_harvester_migrate || log_warn "Migrasi otomatis gagal — jalankan manual lewat menu 14."
     log_ok "Selesai — app & harvester sekarang di versi $new_version."
