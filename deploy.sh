@@ -1018,6 +1018,56 @@ action_down_harvester() {
 }
 
 
+# Service yang punya `profiles:` di docker-compose.yml — harvester-seed
+# (tools) & geoserver/geoserver-db. Mereka memang HANYA jalan kalau profilnya
+# diaktifkan, jadi "tidak ada containernya" adalah keadaan normal dan tidak
+# boleh ikut dilaporkan hilang. Dibaca dari berkasnya, bukan didaftar keras di
+# sini, supaya service ber-profile yang ditambahkan kelak ikut terkecualikan
+# sendiri tanpa ada yang perlu ingat memperbarui daftar.
+service_ber_profile() {
+    awk '
+        /^  [a-z][a-z0-9_-]*:[[:space:]]*$/ { nama = $1; sub(/:$/, "", nama) }
+        /^    profiles:/                    { if (nama != "") print nama }
+    ' "$SCRIPT_DIR/docker-compose.yml" 2>/dev/null | tr -d '\r'
+}
+
+# Peringatkan kalau ada service yang SEHARUSNYA ada tapi containernya tidak
+# pernah dibuat.
+#
+# KENAPA ADA. Menu "Ganti versi" memakai `--no-deps` dan menyebut app+harvester
+# saja — itu memang disengaja (postgres/redis/nginx tidak ikut di-recreate,
+# supaya data & TLS tidak terganggu). Efek sampingnya: kalau stack pernah
+# di-`down`, menu itu TIDAK akan menghidupkan sisanya kembali, lalu tetap
+# melaporkan "Selesai". Terjadi nyata di produksi: 10 service (redis,
+# mapproxy, minio, glitchtip, uptime-kuma, ...) mati berjam-jam tanpa satu pun
+# peringatan. Gejalanya cuma "[redis-cache] connect ETIMEDOUT" di log app —
+# yang ditelan diam-diam karena lapisan cache memang fail-soft.
+#
+# Dibandingkan dgn `ps --services --all`, BUKAN yang sedang berjalan: service
+# sekali-jalan seperti minio-init memang berstatus Exited(0) setelah tugasnya
+# selesai, dan itu normal. Yang jadi masalah adalah service yang containernya
+# TIDAK ADA sama sekali.
+periksa_service_hilang() {
+    local harus ada hilang
+    harus="$($COMPOSE_CMD config --services 2>/dev/null | sort)"
+    if [[ -z "$harus" ]]; then
+        return 0   # tidak bisa dibaca — jangan menghalangi, sekadar lewat
+    fi
+    ada="$($COMPOSE_CMD ps --services --all 2>/dev/null | sort)"
+    hilang="$(comm -23 <(printf '%s
+' "$harus") <(printf '%s
+' "$ada")               | comm -23 - <(service_ber_profile | sort))"
+
+    [[ -z "$hilang" ]] && return 0
+
+    log_warn "Service berikut TIDAK punya container sama sekali:"
+    printf '           %s
+' $hilang
+    log_warn "Menu ini memakai --no-deps, jadi ia TIDAK akan menghidupkannya."
+    log_warn "Jalankan menu 2 (Deploy) lebih dulu untuk memulihkan stack."
+    return 1
+}
+
 # Muat ulang nginx HANYA kalau ensure_nginx_conf benar-benar menulis ulang
 # config. `up -d` biasa tidak cukup: default.conf itu bind-mount, definisi
 # service-nya tidak berubah, jadi Compose membiarkan container lama jalan
@@ -1058,6 +1108,16 @@ action_set_version() {
         echo "RELEASE_VERSION=$new_version" >> "$ENV_FILE"
     fi
     export RELEASE_VERSION="$new_version"
+    # Diperiksa SEBELUM apa pun diubah — termasuk sebelum RELEASE_VERSION di
+    # .env ditulis ulang di atas sudah terlanjur, jadi setidaknya jangan sampai
+    # image ditarik & container di-recreate di atas stack yang tidak utuh.
+    if ! periksa_service_hilang; then
+        if ! confirm "Tetap lanjutkan ganti versi walau stack tidak utuh?"; then
+            log_warn "Dibatalkan — jalankan menu 2 (Deploy) dulu."
+            return 1
+        fi
+    fi
+
     log_info "Pindah ke versi $new_version..."
     siapkan_image "$new_version" || return 1
 
