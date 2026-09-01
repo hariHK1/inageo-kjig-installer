@@ -4,7 +4,11 @@
 # sana). Repo installer ini SENGAJA tidak menyimpan source code aplikasi.
 services:
   app:
-    image: ghcr.io/${GHCR_OWNER}/${GHCR_REPO}-app:${RELEASE_VERSION}
+    # APP_IMAGE_TAG_SUFFIX DITURUNKAN deploy.sh dari APP_BASE_PATH — kosong
+    # untuk deployment di root domain, '-peta' untuk yang dipasang di /peta.
+    # JANGAN diisi manual di .env: nilainya harus selalu sepakat dgn blok
+    # location nginx, dan deploy.sh yang menjamin itu.
+    image: ghcr.io/${GHCR_OWNER}/${GHCR_REPO}-app:${RELEASE_VERSION}${APP_IMAGE_TAG_SUFFIX:-}
     restart: unless-stopped
     environment:
       API_ACCESS_TOKEN: ${API_ACCESS_TOKEN}

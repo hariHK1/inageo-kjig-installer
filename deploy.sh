@@ -166,6 +166,38 @@ check_env() {
         missing=1
     fi
 
+    # APP_BASE_PATH — sub-path tempat aplikasi dipasang, mis. /peta untuk
+    # https://tanahair.indonesia.go.id/peta/. Kosong = dipasang di root.
+    #
+    # Formatnya ketat karena nilainya masuk ke DUA tempat yang harus sepakat:
+    # blok location nginx, dan tag image yang ditarik. Garis miring penutup
+    # akan menghasilkan `location /peta//` yang tidak pernah cocok; tanpa
+    # garis miring pembuka, `location peta/` bukan path sama sekali.
+    if [[ -n "${APP_BASE_PATH:-}" ]]; then
+        if [[ ! "$APP_BASE_PATH" =~ ^/[A-Za-z0-9._~-]+(/[A-Za-z0-9._~-]+)*$ ]]; then
+            log_error "APP_BASE_PATH='${APP_BASE_PATH}' tidak valid — harus diawali '/' dan TANPA '/' di akhir, mis. /peta"
+            missing=1
+        fi
+    fi
+
+    # Sufiks tag image DITURUNKAN dari APP_BASE_PATH, tidak pernah diisi
+    # manual di .env. Keduanya WAJIB sepakat: image varian /peta yang dilayani
+    # nginx root menjawab 404 di mana-mana, dan image root yang dilayani nginx
+    # /peta juga. Menurunkannya di sini membuat keduanya mustahil melenceng.
+    #
+    # Nama tag-nya dipilih CI (lihat .github/workflows/release.yml di repo
+    # source): <versi>-peta untuk build ber-basePath. Karena itu sub-path
+    # selain /peta belum punya image di registry — ditolak terang-terangan di
+    # sini daripada gagal sebagai "manifest unknown" saat pull.
+    if [[ "${APP_BASE_PATH:-}" == "/peta" ]]; then
+        export APP_IMAGE_TAG_SUFFIX="-peta"
+    elif [[ -n "${APP_BASE_PATH:-}" ]]; then
+        log_error "APP_BASE_PATH='${APP_BASE_PATH}' belum punya varian image. CI baru membangun varian untuk '/peta' — tambahkan build baru di .github/workflows/release.yml (repo source) kalau butuh sub-path lain."
+        missing=1
+    else
+        export APP_IMAGE_TAG_SUFFIX=""
+    fi
+
     # Tiga secret disamakan pola cek/generate-nya (mirror source repo).
     ensure_secret() {
         local var_name="$1" label="$2"
@@ -253,6 +285,39 @@ ensure_nginx_conf() {
     fi
 
     sed "s/__DOMAIN__/$DOMAIN/g" "$template" > "$NGINX_CONF"
+
+    # __BASE_PATH__ dipakai '|' sebagai pemisah sed, BUKAN '/' — nilainya
+    # sendiri memuat garis miring ('/peta'), yang akan mengakhiri perintah sed
+    # lebih awal kalau pemisahnya '/'.
+    sed -i "s|__BASE_PATH__|${APP_BASE_PATH:-}|g" "$NGINX_CONF"
+
+    if [[ -n "${APP_BASE_PATH:-}" ]]; then
+        # Blok exact untuk '/peta' polos — alasannya panjang, ada di komentar
+        # penanda pada template. Ditulis lewat file sementara + `sed r` (pola
+        # sama persis dgn __REAL_IP_TRUST__ di bawah) karena isinya banyak
+        # baris; `sed s` hanya nyaman untuk satu baris.
+        local exact_tmp
+        exact_tmp="$(mktemp)"
+        {
+            printf '    location = %s {
+' "$APP_BASE_PATH"
+            printf '        proxy_pass $app_up$request_uri;
+'
+            if [[ "${BEHIND_WAF:-false}" == "true" ]]; then
+                printf '        include /etc/nginx/snippets/proxy-common-waf.conf;
+'
+            else
+                printf '        include /etc/nginx/snippets/proxy-common.conf;
+'
+            fi
+            printf '    }
+'
+        } > "$exact_tmp"
+        sed -i "/__BASE_PATH_EXACT__/r $exact_tmp" "$NGINX_CONF"
+        rm -f "$exact_tmp"
+        log_ok "nginx dikonfigurasi untuk sub-path ${APP_BASE_PATH}/ (bukan root domain)."
+    fi
+    sed -i "/__BASE_PATH_EXACT__/d" "$NGINX_CONF"
 
     if [[ "${BEHIND_WAF:-false}" == "true" ]]; then
         if [[ -n "${WAF_TRUSTED_CIDR:-}" ]]; then
@@ -374,7 +439,7 @@ ensure_infra_display_env() {
         ELASTICSEARCH_CPU_LIMIT ELASTICSEARCH_MEMORY_LIMIT
         HTTP_PORT HTTPS_PORT POSTGRES_HOST_PORT REDIS_HOST_PORT REDIS_QUEUE_HOST_PORT
         HARVESTER_HOST_PORT MAPPROXY_HOST_PORT ELASTICSEARCH_HOST_PORT APP_DIRECT_PORT
-        DOMAIN BEHIND_WAF COMPOSE_FILE
+        DOMAIN BEHIND_WAF COMPOSE_FILE APP_BASE_PATH
     )
     local out="$SCRIPT_DIR/.env.infra-display"
     : > "$out"

@@ -164,11 +164,26 @@ server {
     # melindungi juga instalasi yang MASIH memakai image lama, dan menutup
     # kemungkinan file serupa tidak sengaja masuk public/ lagi. `= ` (exact
     # match) mengalahkan prefix `location /` di bawah.
-    location = /sample-csw.json {
+    location = __BASE_PATH__/sample-csw.json {
         return 404;
     }
 
-    location /_next/static/ {
+    # __BASE_PATH_EXACT__
+    # Kalau APP_BASE_PATH diisi (mis. /peta), deploy.sh mengganti baris penanda
+    # ini dengan satu location `= /peta` — kalau kosong, barisnya dihapus.
+    #
+    # KENAPA PERLU BLOK EXACT SENDIRI. `location /peta/` (dgn garis miring
+    # penutup) TIDAK cocok dgn request ke `/peta` polos, padahal justru itulah
+    # URL kanonik yang dihasilkan Next.js ber-basePath: halaman depan disajikan
+    # di `/peta`, dan `/peta/` malah DIALIHKAN Next ke `/peta` (trailingSlash
+    # bawaan false). Menjawabnya dgn `return 301 /peta/` akan mengadu dua
+    # pengalihan itu jadi loop tak berujung, sehingga blok ini mem-proxy-kannya
+    # langsung, bukan mengalihkan.
+    #
+    # Prefiks polos `location /peta` (tanpa garis miring) memang mencakup
+    # keduanya, tapi juga ikut menangkap `/petani`, `/petalogo`, dan path lain
+    # milik aplikasi tetangga di domain yang sama.
+    location __BASE_PATH__/_next/static/ {
         proxy_pass $app_up$request_uri;
         include /etc/nginx/snippets/proxy-common.conf;
         proxy_cache static_cache;
@@ -177,7 +192,7 @@ server {
         add_header X-Nginx-Cache $upstream_cache_status always;
     }
 
-    location /apis/ {
+    location __BASE_PATH__/apis/ {
         limit_req zone=apis burst=80 nodelay;
         proxy_pass $app_up$request_uri;
         # proxy_read_timeout SUDAH ada di proxy-common.conf (60s) — jangan
@@ -185,7 +200,7 @@ server {
         include /etc/nginx/snippets/proxy-common.conf;
     }
 
-    location / {
+    location __BASE_PATH__/ {
         proxy_pass $app_up$request_uri;
         include /etc/nginx/snippets/proxy-common.conf;
     }

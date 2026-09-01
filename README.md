@@ -55,6 +55,19 @@ Semua lewat `.env`, tidak perlu edit `docker-compose.yml`:
 - `POSTGRES_HOST_PORT`, `REDIS_HOST_PORT`, `REDIS_QUEUE_HOST_PORT`, `MAPPROXY_HOST_PORT` — **opsional**, kosong (default) = service itu TIDAK bisa diakses dari luar Docker sama sekali (postur aman default, cocok produksi). Isi + set `COMPOSE_FILE=docker-compose.yml:docker-compose.ports.yml` (dilakukan otomatis oleh `install.sh` kalau kamu jawab "ya" saat ditanya) untuk expose ke host — berguna buat debug langsung (`psql`, `redis-cli`) tanpa lewat proxy app. **Tidak disarankan untuk server produksi yang publik.**
 - `APP_DIRECT_PORT` & `HARVESTER_HOST_PORT` — sama kegunaannya (akses langsung/debug, mis. curl API harvester) tapi **overlay-nya masing-masing terpisah sendiri** (`docker-compose.app-port.yml` & `docker-compose.harvester-port.yml`, bukan `docker-compose.ports.yml`) — keduanya cuma bisa dipakai kalau service-nya berjalan **1 replica** (`APP_REPLICAS=1` / `HARVESTER_REPLICAS=1`, banyak replica tidak bisa berbagi satu port host yang sama). Kalau diisi, `COMPOSE_FILE` butuh overlay tambahan yang sesuai (`install.sh` menambahkannya otomatis, atau tambahkan manual kalau diisi belakangan). File-file ini sengaja dipisah dari `docker-compose.ports.yml` supaya nilai kosong benar-benar berarti "tidak ter-expose" — pernah ada bug nyata (dua kali, app lalu harvester) di mana port digabung satu file dengan fallback default, sehingga var kosong tetap ter-publish ke port default dan bikin replica ke-2 dst rebutan port host yang sama, gagal start.
 
+## Memasang di sub-path, bukan di root domain
+
+Bawaannya aplikasi dipasang di root domain (`https://<DOMAIN>/`). Kalau domainnya dipakai bersama aplikasi lain dan aplikasi ini cuma kebagian satu sub-path — mis. `https://tanahair.indonesia.go.id/peta/` — isi `APP_BASE_PATH=/peta` di `.env`. Awali `/`, jangan diakhiri `/`.
+
+**Yang membedakannya dari semua opsi lain di `.env`: nilai ini juga menentukan image mana yang ditarik.** Next.js memanggang `basePath` ke dalam bundel saat *build* — ke build manifest, ke `publicPath` webpack, dan ke `.next/required-server-files.json` — jadi tidak bisa diganti saat container start seperti config publik lain. CI karena itu membangun **dua** image app per rilis: `<versi>` untuk root dan `<versi>-peta` untuk sub-path. `deploy.sh` memilih tag yang benar sendiri dari `APP_BASE_PATH`, jadi tetap satu tempat yang diisi. Saat ini hanya `/peta` yang punya varian image; nilai lain ditolak dengan pesan yang menjelaskan apa yang perlu ditambahkan di workflow repo source.
+
+Gejala kalau keduanya tidak sepakat (mis. nginx sudah `/peta` tapi image-nya varian root): halaman muncul sebagai HTML telanjang tanpa gaya, dan Network tab penuh 404 untuk `/_next/static/...` **tanpa** prefix `/peta`.
+
+Dua hal yang perlu diingat:
+
+- **`nginx/conf.d/default.conf` hanya dibuat kalau belum ada.** Mengubah `APP_BASE_PATH` pada instalasi yang sudah jalan tidak menulis ulang berkas itu. Hapus dulu, lalu jalankan `./deploy.sh` lagi.
+- **Pastikan WAF meneruskan hanya `/peta/*` ke server ini.** Kalau seluruh domain diteruskan, tambahkan `location / { return 404; }` supaya aplikasi ini tidak ikut menjawab path milik aplikasi tetangga.
+
 ## DNS (opsional, workaround jalur relay Docker)
 
 Kalau container `app`/`harvester` mengalami gagal resolusi DNS intermiten (log `EAI_AGAIN`) padahal server sendiri terhubung internet normal, biasanya itu bug jalur relay DNS bawaan Docker (`127.0.0.11` di container → stub `systemd-resolved` `127.0.0.53` di host), **bukan** DNS server jaringan kamu yang rusak — ciri khasnya: query langsung ke DNS server itu (tanpa lewat Docker) selalu sukses, tapi lewat container selalu/sering gagal.
