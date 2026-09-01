@@ -74,6 +74,25 @@ Kalau container `app`/`harvester` mengalami gagal resolusi DNS intermiten (log `
 
 Isi `DNS_PRIMARY` (dan opsional `DNS_FALLBACK`, default `1.1.1.1`) di `.env` untuk membuat container query LANGSUNG ke DNS server, bypass jalur relay itu (`docker-compose.dns.yml`, sama pola dengan overlay port di atas — `install.sh` menambahkannya otomatis ke `COMPOSE_FILE` kalau `DNS_PRIMARY` diisi lewat wizard). `DNS_PRIMARY` sengaja tetap DNS server jaringan kamu sendiri (bukan diganti DNS publik) — sejumlah domain instansi (`big.go.id`, `ina-sdi.or.id`) resolve ke IP privat lewat resolver internal, DNS publik belum tentu punya jawaban yang sama.
 
+### Kalau rute privat ternyata mati: pakai DNS publik
+
+Nasihat di atas mengandaikan rute privatnya hidup. Terukur di satu server produksi bahwa itu tidak selalu benar: alamat di blok `10.10.x` **menerima koneksi TCP lalu membuang ClientHello TLS**. Gejalanya menyesatkan — aplikasi melapor `ConnectTimeoutError ... timeout: 10000ms` (fase connect undici mencakup handshake TLS), sehingga terbaca seolah simpulnya tak bisa dihubungi, padahal TCP polos ke port yang sama tersambung dalam 3ms.
+
+**Uji TCP saja tidak cukup untuk menemukan ini.** Yang harus diuji handshake TLS-nya:
+
+```bash
+docker compose exec -T harvester node -e "
+const tls=require('tls'),t0=Date.now();
+const s=tls.connect({host:'geoservices.big.go.id',port:443,servername:'geoservices.big.go.id',timeout:10000,rejectUnauthorized:false},
+  ()=>{console.log('TLS OK',Date.now()-t0,'ms');s.destroy()});
+s.on('timeout',()=>{console.log('MENGGANTUNG — ClientHello dibuang');s.destroy()});
+s.on('error',e=>console.log(e.code));"
+```
+
+Kalau menggantung lewat resolver internal tapi berjabat tangan lewat resolver publik, isi `DNS_PRIMARY` dengan **DNS publik**. Mempertahankan resolver internal berarti setiap simpul di blok itu gagal permanen.
+
+Ini tambalan, bukan perbaikan — yang sebenarnya rusak adalah rute internalnya, dan itu ranah pengelola jaringan. Laporkan dengan bukti konkret: *"10.10.180.22:443 menerima TCP tapi tidak pernah menjawab ClientHello dari <IP server>."*
+
 ## Menjalankan APP tanpa harvester (harvester dikelola pihak lain)
 
 Dipakai kalau harvester di server ini diturunkan dan perannya diambil alih pihak lain — stack compose terpisah di server yang sama, atau host lain.

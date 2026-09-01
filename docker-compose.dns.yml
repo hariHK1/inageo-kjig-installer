@@ -9,11 +9,42 @@
 # <-> systemd-resolved kadang tidak reliable), BUKAN resolver DNS
 # jaringannya sendiri yang rusak.
 #
-# DNS_PRIMARY tetap server DNS jaringan kamu sendiri (BUKAN diganti DNS
-# publik) — sejumlah domain instansi (big.go.id, ina-sdi.or.id, lihat
-# src/app/apis/_lib/ssrf-guard.ts di repo aplikasi) SENGAJA resolve ke IP
-# privat lewat resolver internal jaringan pemerintah; DNS publik (mis.
-# 8.8.8.8) belum tentu punya jawaban yang sama untuk domain semacam itu.
+# PILIHAN NILAI DNS_PRIMARY - BACA INI SEBELUM MENGISI, jawabannya beda
+# per jaringan dan salah pilih membuat harvest gagal total dgn gejala yang
+# menyesatkan.
+#
+# Bawaan yang MASUK AKAL: resolver internal jaringan kamu sendiri. Sejumlah
+# domain instansi (big.go.id, ina-sdi.or.id, lihat ssrf-guard.ts di repo
+# aplikasi) memang resolve ke IP privat lewat resolver internal pemerintah,
+# dan DNS publik belum tentu punya jawaban yang sama.
+#
+# TAPI ITU HANYA BENAR KALAU RUTE PRIVATNYA MEMANG HIDUP. Terukur nyata di
+# satu server produksi (2026-09-01): alamat di blok 10.10.x MENERIMA koneksi
+# TCP lalu MEMBUANG ClientHello TLS. Akibatnya undici melapor
+# "ConnectTimeoutError ... timeout: 10000ms" - fase connect miliknya mencakup
+# handshake TLS - sehingga terbaca seolah host tujuan tidak bisa dihubungi,
+# padahal `nc`/TCP polos ke port yang sama tersambung dalam 3ms. Uji TCP saja
+# TIDAK cukup untuk memeriksa ini; handshake TLS-nya yang harus diuji.
+#
+# Pengukuran di server itu, host yang sama lewat dua resolver:
+#   geoportal.big.go.id    internal 10.10.180.22  menggantung
+#                          publik   202.4.179.105 TLS OK 17ms
+#   geoservices.big.go.id  internal 10.10.180.77  menggantung
+#                          publik   202.4.179.120 TLS OK 14ms
+#   gresikkab.ina-sdi...   internal 10.10.180.53  menggantung
+#                          publik   202.4.179.12  TLS OK 16ms
+# Host yang TIDAK berada di blok 10.x (peta.big.go.id, ambon.ina-sdi.or.id)
+# menjawab identik di kedua resolver. Tiga dari tiga host ber-IP privat gagal.
+#
+# CARA MEMUTUSKAN untuk jaringanmu sendiri: uji handshake TLS ke satu host
+# simpul lewat resolver internal DAN publik. Kalau yang internal menggantung
+# sementara yang publik berjabat tangan, isi DNS_PRIMARY dgn DNS PUBLIK -
+# rute privatnya tidak berguna, dan mempertahankannya berarti setiap simpul
+# di blok itu gagal permanen.
+#
+# Menukar DNS adalah TAMBALAN, bukan perbaikan: yang sebenarnya rusak adalah
+# rute internal yang setengah hidup, dan itu ranah pengelola jaringan.
+#
 # DNS_FALLBACK murni jaring pengaman kalau primer benar-benar down (bukan
 # cuma jalur relay-nya yang bermasalah).
 #
