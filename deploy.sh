@@ -315,9 +315,26 @@ ensure_nginx_conf() {
         } > "$exact_tmp"
         sed -i "/__BASE_PATH_EXACT__/r $exact_tmp" "$NGINX_CONF"
         rm -f "$exact_tmp"
-        log_ok "nginx dikonfigurasi untuk sub-path ${APP_BASE_PATH}/ (bukan root domain)."
+
+        # Penjaga root — tolak apa pun di luar sub-path kita. Alasannya ada di
+        # komentar penanda pada template.
+        local guard_tmp
+        guard_tmp="$(mktemp)"
+        {
+            printf '    location / {
+'
+            printf '        return 404;
+'
+            printf '    }
+'
+        } > "$guard_tmp"
+        sed -i "/__ROOT_GUARD__/r $guard_tmp" "$NGINX_CONF"
+        rm -f "$guard_tmp"
+
+        log_ok "nginx dikonfigurasi untuk sub-path ${APP_BASE_PATH}/ — path di luar itu dijawab 404."
     fi
     sed -i "/__BASE_PATH_EXACT__/d" "$NGINX_CONF"
+    sed -i "/__ROOT_GUARD__/d" "$NGINX_CONF"
 
     if [[ "${BEHIND_WAF:-false}" == "true" ]]; then
         if [[ -n "${WAF_TRUSTED_CIDR:-}" ]]; then

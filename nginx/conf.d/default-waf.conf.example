@@ -149,6 +149,23 @@ server {
         include /etc/nginx/snippets/proxy-common-waf.conf;
     }
 
+    # __ROOT_GUARD__
+    # Kalau APP_BASE_PATH diisi, deploy.sh mengganti baris penanda ini dengan
+    # `location / { return 404; }` — kalau kosong, barisnya dihapus.
+    #
+    # KENAPA. Di deployment sub-path, domainnya dipakai bersama aplikasi lain.
+    # Tanpa blok ini, SETIAP path di luar sub-path kita (mis. '/', '/portal',
+    # '/_next/...') jatuh ke nginx ini tanpa location yang cocok. Kalau WAF di
+    # depan cuma meneruskan '/peta/*', itu tidak pernah terjadi — tapi kita
+    # tidak mengendalikan konfigurasi WAF, dan salah rute di sisi sana berarti
+    # server ini diam-diam ikut menjawab path milik aplikasi tetangga.
+    #
+    # Sengaja 404 POLOS dari nginx, bukan error_page /error.html bergaya
+    # Ina-Geoportal: halaman bermerek di root akan MENGAKU root domain ini
+    # milik kita, padahal justru sebaliknya.
+    #
+    # Urutan di berkas tidak menentukan — nginx memilih prefix TERPANJANG yang
+    # cocok, jadi '/peta/' tetap menang atas '/' untuk request kita sendiri.
     location __BASE_PATH__/ {
         proxy_pass $app_up$request_uri;
         include /etc/nginx/snippets/proxy-common-waf.conf;

@@ -66,7 +66,7 @@ Gejala kalau keduanya tidak sepakat (mis. nginx sudah `/peta` tapi image-nya var
 Dua hal yang perlu diingat:
 
 - **`nginx/conf.d/default.conf` hanya dibuat kalau belum ada.** Mengubah `APP_BASE_PATH` pada instalasi yang sudah jalan tidak menulis ulang berkas itu. Hapus dulu, lalu jalankan `./deploy.sh` lagi.
-- **Pastikan WAF meneruskan hanya `/peta/*` ke server ini.** Kalau seluruh domain diteruskan, tambahkan `location / { return 404; }` supaya aplikasi ini tidak ikut menjawab path milik aplikasi tetangga.
+- **Path di luar sub-path dijawab 404 secara otomatis.** Begitu `APP_BASE_PATH` diisi, `deploy.sh` memasang `location / { return 404; }` supaya server ini tidak ikut menjawab path milik aplikasi tetangga kalau WAF ternyata meneruskan seluruh domain, bukan hanya `/peta/*`. Kalau WAF memang cuma meneruskan sub-path kita, blok itu tidak pernah kena — aman di kedua kasus, jadi tidak perlu diatur manual.
 
 ## DNS (opsional, workaround jalur relay Docker)
 
