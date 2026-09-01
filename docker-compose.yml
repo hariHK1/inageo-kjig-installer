@@ -140,8 +140,30 @@ services:
       # harvester, sehingga mode "app saja" mustahil dijalankan.
       - redis
     networks:
-      - web
-      - cache
+      # ALIAS `inageo-app` — WAJIB dipakai nginx sbg tujuan proxy, bukan
+      # nama service `app` yang polos.
+      #
+      # KENAPA. Nama service hanya unik DI DALAM satu proyek compose. Kalau
+      # network `web` dipakai bersama stack lain di server yang sama (nyata
+      # terjadi di dev-kjig: satu domain melayani /peta milik kita dan
+      # /persetujuan-hln milik portal lain), dan stack itu KEBETULAN juga
+      # punya service bernama `app`, maka DNS Docker mengembalikan KEDUA
+      # alamat bergantian. Akibatnya request ke /peta kadang dijawab
+      # aplikasi tetangga — terlihat sbg halaman 404 yang muncul hanya
+      # sesekali saat di-refresh, dan mustahil dilacak dari log nginx
+      # karena nginx-nya sendiri berperilaku benar.
+      #
+      # Terbukti di lapangan lewat nama chunk: halaman yang menjawab memuat
+      # `turbopack-*.js`, padahal image ini dibangun dgn `next build
+      # --webpack` dan tidak pernah menghasilkan chunk semacam itu.
+      #
+      # Nama `app` SENGAJA tetap ada (compose selalu mendaftarkannya) —
+      # instalasi lama yang default.conf-nya masih menunjuk `app` tidak
+      # ikut rusak oleh perubahan ini.
+      web:
+        aliases:
+          - inageo-app
+      cache:
     # Tanpa `ports:` di sini — publik hanya lewat nginx. Akses langsung
     # (bypass nginx) ada di docker-compose.ports.yml, opsional.
 

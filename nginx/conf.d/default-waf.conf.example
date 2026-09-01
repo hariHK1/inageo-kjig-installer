@@ -90,7 +90,13 @@ server {
     gzip_min_length 1024;
     gzip_types application/javascript application/json text/css image/svg+xml application/xml;
 
-    set $app_up http://app:3000;
+    # `inageo-app` = alias jaringan KHUSUS milik service app kita (lihat
+    # docker-compose.yml). SENGAJA bukan nama service `app` yang polos:
+    # nama service hanya unik di dalam satu proyek compose, dan kalau
+    # network ini dipakai bersama stack lain yang kebetulan juga punya
+    # service `app`, DNS Docker mengembalikan kedua alamat bergantian —
+    # request kita lalu sesekali dijawab aplikasi tetangga.
+    set $app_up http://inageo-app:3000;
 
     # Halaman error milik nginx — HANYA untuk kegagalan yang dijawab nginx
     # SENDIRI: container app mati/belum siap (502/504), rate-limit terlampaui
