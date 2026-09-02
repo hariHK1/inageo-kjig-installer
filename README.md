@@ -93,6 +93,77 @@ Kalau menggantung lewat resolver internal tapi berjabat tangan lewat resolver pu
 
 Ini tambalan, bukan perbaikan — yang sebenarnya rusak adalah rute internalnya, dan itu ranah pengelola jaringan. Laporkan dengan bukti konkret: *"10.10.180.22:443 menerima TCP tapi tidak pernah menjawab ClientHello dari <IP server>."*
 
+## Simpul yang hanya bisa dijangkau lewat satu jalur (daftar extra-hosts)
+
+Sebagian simpul jaringan hanya hidup lewat **satu** jalur, dan jalurnya berbeda-beda. Pada pengukuran di server produksi (2026-09-02, 471 simpul):
+
+| | |
+|---|---|
+| Hanya hidup lewat **internet** (resolver publik) | 41 simpul |
+| Hanya hidup lewat **jaringan internal** | 14 simpul |
+
+Tidak ada satu setelan `DNS_PRIMARY` yang benar untuk keduanya. Karena itu resolver diarahkan ke yang menang jumlahnya (publik), dan sisanya ditangani sebagai daftar pengecualian — `extra-hosts.conf` — yang memaksa nama-nama tertentu ke alamat internalnya, melewati DNS. Nama lain tidak tersentuh.
+
+Keempat belas simpul itu semuanya menunjuk **satu** server bersama (`202.4.179.75`) yang port 80 dan 443-nya tertutup dari internet tapi terbuka dari dalam. Jadi ini bukan 14 masalah, melainkan satu.
+
+### Cara memakainya
+
+```bash
+./deploy.sh   # menu 23) Jangkauan simpul
+```
+
+| Pilihan | Kegunaan | Lama |
+|---|---|---|
+| **s) Survei ulang** | ukur seluruh registry lewat dua resolver, tampilkan selisihnya, tulis daftar setelah disetujui | 1–3 menit |
+| **t) Terapkan** | tulis overlay compose + recreate `app` & `harvester` | ~1 menit |
+| **p) Periksa cepat** | uji hanya entri yang sudah ada | beberapa detik |
+
+Survei **tidak pernah** menulis konfigurasi sendiri. Ia menampilkan usulan `+ tambah` / `~ ubah` / `- hapus` lebih dulu, lalu menunggu persetujuan. Alasannya: satu kali probe bisa salah — simpul yang kebetulan gangguan sesaat akan tampak seperti perubahan permanen. Daftar lama selalu dicadangkan sebelum ditimpa.
+
+### Yang perlu diketahui
+
+**`extra_hosts` hanya berlaku saat container DIBUAT.** Mengubah daftarnya berarti recreate `app` + `harvester`, bukan sekadar restart — dan itu menghentikan harvest yang sedang berjalan (bisa dilanjutkan, ada checkpoint). `deploy.sh` selalu meminta konfirmasi sebelumnya.
+
+**Overlay-nya harus tercantum di `COMPOSE_FILE`.** Kalau tidak, berkasnya ada tapi tidak pernah terbaca — dan `docker compose` tidak akan mengeluh sedikit pun. Menu 23 memeriksanya dan menawarkan memperbaikinya.
+
+**Tidak ada biaya saat harvest.** `/etc/hosts` adalah berkas lokal; membacanya justru lebih cepat daripada kueri DNS. Jumlah entri tidak berpengaruh.
+
+### Memantau daftar extra-hosts
+
+Daftar ini bisa basi diam-diam: IP internal berubah, atau jalur publik pulih dan pin-nya tidak lagi diperlukan. Untuk itu ada pemeriksa ringkas yang hanya menguji entri yang tersemat — belasan, bukan 471 — sehingga aman dijalankan berkala.
+
+```bash
+# tiap 6 jam, hasilnya ke syslog
+0 */6 * * *  cd /home/adminhi/inageo-kjig-installer && \
+             ./scripts/periksa-extra-hosts.sh 2>&1 | logger -t extra-hosts
+```
+
+Skrip ini **berjalan sunyi kalau semuanya baik** dan hanya berbicara saat ada yang perlu ditindak. Kode keluarnya: `0` sehat, `1` ada simpul yang benar-benar mati. Entri yang pin-nya sudah tidak diperlukan dilaporkan tapi **tidak** membuat kode keluarnya 1 — alarm yang berbunyi untuk hal tidak mendesak akan diabaikan orang, lalu berhenti berguna justru saat dibutuhkan.
+
+**Opsional — Uptime Kuma.** Kalau Anda memakainya, buat monitor bertipe **Push**, lalu isi URL-nya di `KUMA_PUSH_URL` pada `.env`. Skrip memanggil URL itu selagi semua entri sehat dan berhenti memanggilnya begitu ada yang rusak — sehingga Kuma yang berteriak, tanpa perlu ada yang membaca log.
+
+UI Kuma sengaja tidak diekspos (lihat § Lockdown port), jadi untuk membuat monitornya sekali:
+
+```bash
+ssh -L 3001:localhost:3001 <user>@<server>
+# buka http://localhost:3001 di browser Anda
+```
+
+Tanpa Kuma, entri cron di atas sudah cukup.
+
+### Ini tambalan, bukan arsitektur
+
+Yang sebenarnya rusak ada dua, keduanya di luar repo ini:
+
+1. **Jalur internal `10.10.x` menerima koneksi TCP lalu membuang handshake TLS** — ciri perangkat inspeksi yang tidak bisa membaca HTTPS. Dampaknya terukur: dari 49 simpul di `202.4.179.12`, server dev menjangkau 49, server produksi hanya 10. Selisih 39 simpul, di satu IP saja.
+2. **Server `202.4.179.75` tertutup dari internet** di port 80 maupun 443, padahal 14 simpul memakainya.
+
+Untuk dilaporkan ke pengelola jaringan:
+
+> Dari `202.4.179.40`, koneksi TCP ke `10.10.180.x:443` berhasil dalam 1–7 ms, tetapi ClientHello TLS tidak pernah dijawab. HTTP polos ke port 80 pada host yang sama menjawab 200 normal. Server lain di jaringan yang sama (dev-kjig) tidak mengalaminya.
+
+Begitu salah satunya diperbaiki, jalankan survei ulang — sebagian besar isi daftar akan muncul sebagai usulan `- hapus`.
+
 ## Menjalankan APP tanpa harvester (harvester dikelola pihak lain)
 
 Dipakai kalau harvester di server ini diturunkan dan perannya diambil alih pihak lain — stack compose terpisah di server yang sama, atau host lain.

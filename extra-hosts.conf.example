@@ -1,0 +1,48 @@
+# Daftar simpul yang HARUS dipaksa ke alamat internal.
+#
+# Salin jadi `extra-hosts.conf` (gitignored) lalu isi. Kosong/tidak ada =
+# fitur ini mati total dan tidak ada yang berubah.
+#
+# ── KENAPA INI ADA ─────────────────────────────────────────────────────────
+# Sebagian simpul jaringan hanya bisa dijangkau lewat SATU jalur saja, dan
+# jalurnya berbeda-beda:
+#
+#   • Sebagian besar hidup lewat internet (resolver publik) — 41 simpul pada
+#     pengukuran 2026-09-02 di server produksi HANYA bisa lewat jalur ini.
+#   • Segelintir hanya hidup lewat jaringan internal — 14 simpul, SEMUANYA
+#     menunjuk satu server bersama (202.4.179.75) yang port 80 & 443-nya
+#     tertutup dari internet tapi terbuka dari dalam.
+#
+# Tidak ada satu setelan DNS yang benar untuk keduanya. DNS_PRIMARY karena itu
+# diarahkan ke resolver PUBLIK (menang 41 lawan 14), dan berkas ini menjadi
+# daftar pengecualiannya: nama-nama di sini saja yang dipaksa ke IP internal,
+# sisanya tetap lewat DNS publik.
+#
+# ── INI TAMBALAN, BUKAN ARSITEKTUR ─────────────────────────────────────────
+# Yang sebenarnya rusak ada dua, keduanya di luar repo ini:
+#   1. Jalur internal 10.10.x MENERIMA koneksi TCP lalu MEMBUANG handshake TLS
+#      (ciri perangkat inspeksi). Terukur: dari 49 simpul di 202.4.179.12,
+#      server dev menjangkau 49, server produksi hanya 10 — selisih 39 simpul
+#      hilang hanya karena TLS diblokir di jalur itu.
+#   2. Server 202.4.179.75 tertutup dari internet di port 80 maupun 443.
+#
+# Begitu salah satunya diperbaiki, sebagian besar isi berkas ini bisa dibuang.
+# Jalankan menu "Survei jangkauan simpul" untuk melihat mana yang sudah tidak
+# perlu lagi.
+#
+# ── FORMAT ─────────────────────────────────────────────────────────────────
+# Satu baris satu simpul:   <nama-host>  <ip-internal>
+# Baris kosong & yang diawali '#' diabaikan. Teks setelah IP diabaikan juga,
+# jadi alasan boleh ditulis di baris yang sama.
+#
+# Cara mengisinya: JANGAN mengetik manual. Jalankan menu "Survei jangkauan
+# simpul" di deploy.sh — ia mengukur seluruh registry, menyusun daftarnya,
+# menampilkan selisihnya, lalu menulis ke sini setelah Anda setujui.
+#
+# Contoh (hasil pengukuran 2026-09-02, server produksi):
+#
+# kotamobagukota.ina-sdi.or.id    10.10.180.157   publik ECONNREFUSED
+# sigikab.ina-sdi.or.id           10.10.180.157   publik ECONNREFUSED
+# enrekangkab.ina-sdi.or.id       10.10.132.24    publik ECONNREFUSED
+# sidrapkab.ina-sdi.or.id         10.10.132.47    publik ECONNREFUSED
+# tojounaunakab.ina-sdi.or.id     10.10.132.60    publik ECONNREFUSED

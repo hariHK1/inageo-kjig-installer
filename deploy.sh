@@ -839,6 +839,10 @@ action_deploy() {
     # berikutnya (lihat ensure_minio_credentials).
     ensure_minio_credentials
     ensure_infra_display_env
+    # Overlay extra-hosts ditulis ulang dari extra-hosts.conf tiap deploy —
+    # konf adalah sumber kebenaran, YAML-nya cuma turunan. Tanpa ini, daftar
+    # yang disunting tangan di konf tidak akan pernah sampai ke container.
+    eh_tulis_yml
     if [[ "${BEHIND_WAF:-false}" == "true" ]]; then
         log_info "BEHIND_WAF=true — melewati bootstrap TLS/certbot."
     else
@@ -1441,6 +1445,233 @@ action_renew_tls() {
         && log_ok "Sertifikat diperbarui dan nginx sudah reload."
 }
 
+# ── Jangkauan simpul: daftar extra-hosts ────────────────────────────────────
+# Sebagian simpul hanya bisa dijangkau lewat SATU jalur, dan jalurnya berbeda
+# per simpul: mayoritas lewat internet, segelintir hanya lewat jaringan
+# internal. Tidak ada satu setelan DNS yang benar untuk keduanya, jadi
+# DNS_PRIMARY diarahkan ke resolver yang menang secara jumlah, dan sisanya
+# ditangani sbg pengecualian di sini.
+#
+# Alasan lengkap + angka pengukurannya ada di extra-hosts.conf.example.
+EXTRA_HOSTS_CONF="$SCRIPT_DIR/extra-hosts.conf"
+EXTRA_HOSTS_YML="$SCRIPT_DIR/docker-compose.extra-hosts.yml"
+
+# Baca konf jadi "nama|ip" per baris. Komentar, baris kosong, dan kolom ke-3
+# dst (alasan) diabaikan.
+eh_baca() {
+    [[ -f "$EXTRA_HOSTS_CONF" ]] || return 0
+    awk '!/^[[:space:]]*#/ && NF >= 2 { print $1 "|" $2 }' "$EXTRA_HOSTS_CONF"
+}
+
+eh_jumlah() { eh_baca | grep -c . || true; }
+
+# Hasilkan overlay compose dari konf. DIHASILKAN, bukan disunting tangan —
+# supaya daftar di konf tetap satu-satunya sumber kebenaran dan tidak mungkin
+# berbeda dari yang benar-benar dipasang ke container.
+eh_tulis_yml() {
+    local n; n="$(eh_jumlah)"
+    if [[ "$n" == "0" ]]; then
+        rm -f "$EXTRA_HOSTS_YML"
+        return 0
+    fi
+    {
+        echo "# DIHASILKAN deploy.sh dari extra-hosts.conf — JANGAN disunting tangan."
+        echo "# Ubah daftarnya di extra-hosts.conf, lalu jalankan menu"
+        echo "# \"Survei jangkauan simpul\" (atau deploy) supaya berkas ini ditulis ulang."
+        echo "#"
+        echo "# extra_hosts memaksa nama-nama di bawah ke alamat internal, MELEWATI DNS."
+        echo "# Nama lain tidak tersentuh dan tetap memakai DNS_PRIMARY seperti biasa."
+        echo "#"
+        echo "# Dibaca oleh app & harvester: keduanya menghubungi simpul jaringan —"
+        echo "# harvester saat harvest, app saat proxy peta & thumbnail."
+        echo "#"
+        echo "# CATATAN PENTING: extra_hosts hanya berlaku saat container DIBUAT."
+        echo "# Mengubah daftar ini berarti recreate app + harvester, bukan sekadar"
+        echo "# restart. deploy.sh mengurusnya."
+        echo "services:"
+        local svc
+        for svc in app harvester; do
+            echo "  $svc:"
+            echo "    extra_hosts:"
+            local baris nama ip
+            while IFS='|' read -r nama ip; do
+                [[ -z "$nama" ]] && continue
+                echo "      - \"$nama:$ip\""
+            done < <(eh_baca)
+        done
+    } > "$EXTRA_HOSTS_YML"
+    log_ok "docker-compose.extra-hosts.yml ditulis ulang ($n entri)."
+}
+
+# Pastikan overlay-nya benar-benar ikut dipakai. Sama seperti rute nginx:
+# berkasnya bisa ada tapi tidak pernah terbaca kalau tidak tercantum di
+# COMPOSE_FILE — dan `docker compose` tidak akan mengeluh sedikit pun.
+eh_pastikan_compose_file() {
+    local n; n="$(eh_jumlah)"
+    [[ "$n" == "0" ]] && return 0
+    local nama_berkas="docker-compose.extra-hosts.yml"
+    if [[ "${COMPOSE_FILE:-}" == *"$nama_berkas"* ]]; then
+        return 0
+    fi
+
+    log_warn "$nama_berkas belum tercantum di COMPOSE_FILE — daftar extra-hosts TIDAK akan dipakai."
+    local usul
+    if [[ -z "${COMPOSE_FILE:-}" ]]; then
+        # COMPOSE_FILE kosong = Compose memakai penemuan bawaan. Begitu kita
+        # mengisinya, penemuan itu mati dan docker-compose.yml WAJIB disebut
+        # eksplisit, kalau tidak seluruh stack hilang.
+        usul="docker-compose.yml:$nama_berkas"
+    else
+        usul="${COMPOSE_FILE}:$nama_berkas"
+    fi
+    log_info "Usulan: COMPOSE_FILE=$usul"
+    confirm "Tulis ke .env sekarang?" || { log_warn "Dilewati — daftar extra-hosts belum aktif."; return 1; }
+    env_set_kv COMPOSE_FILE "$usul"
+    export COMPOSE_FILE="$usul"
+    log_ok "COMPOSE_FILE diperbarui."
+}
+
+eh_terapkan() {
+    eh_tulis_yml
+    eh_pastikan_compose_file || return 1
+    local n; n="$(eh_jumlah)"
+    [[ "$n" == "0" ]] && { log_info "Daftar kosong — tidak ada yang diterapkan."; return 0; }
+
+    log_warn "extra_hosts hanya berlaku saat container DIBUAT — app & harvester akan di-recreate."
+    log_warn "Harvest yang sedang berjalan akan terhenti (bisa dilanjutkan lagi, ada checkpoint)."
+    confirm "Recreate sekarang?" || { log_info "Ditunda. Jalankan menu 2 kapan pun siap."; return 0; }
+    $COMPOSE_CMD up -d --force-recreate app harvester
+    log_ok "app & harvester dibuat ulang dengan $n entri extra-hosts."
+}
+
+# Ambil seluruh URL simpul dari basis data. Lewat container postgres, bukan
+# psql di host — host belum tentu punya klien psql, dan kredensialnya sudah
+# ada di environment container.
+eh_ambil_urls() {
+    $COMPOSE_CMD exec -T postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -tAc \
+        "SELECT situs FROM simpul_jaringan WHERE situs ~ '^https?://'" 2>/dev/null | tr -d '\r' | tr '\n' ' '
+}
+
+action_survei_jangkauan() {
+    local skrip="$SCRIPT_DIR/scripts/survei-jangkauan.js"
+    if [[ ! -f "$skrip" ]]; then
+        log_error "scripts/survei-jangkauan.js tidak ada — jalankan 'git pull' dulu."
+        return 1
+    fi
+
+    log_info "Mengambil daftar simpul dari basis data..."
+    local urls; urls="$(eh_ambil_urls)"
+    local jml; jml="$(echo $urls | wc -w)"
+    if [[ "$jml" -lt 1 ]]; then
+        log_error "Tidak ada simpul terbaca. Pastikan service postgres berjalan (menu 2)."
+        return 1
+    fi
+
+    log_info "Mengukur $jml simpul lewat dua resolver — ini menghubungi server instansi, butuh 1-3 menit."
+    log_warn "Jangan dijalankan berulang tanpa perlu: sebagian server membatasi IP yang terlalu sering menyapa."
+    confirm "Lanjut?" || return 1
+
+    local keluaran
+    keluaran="$($COMPOSE_CMD exec -T -e URLS="$urls" \
+        -e DNS_INTERNAL="${DNS_PRIMARY_INTERNAL:-192.168.201.10}" \
+        -e DNS_PUBLIK="${DNS_PUBLIK_SURVEI:-1.1.1.1}" \
+        harvester node < "$skrip")" || { log_error "Survei gagal dijalankan."; return 1; }
+
+    echo "$keluaran" | grep -v '^#JSON#'
+    local json; json="$(echo "$keluaran" | grep '^#JSON#' | tail -1 | sed 's|^#JSON#||')"
+    if [[ -z "$json" ]]; then
+        log_error "Survei tidak menghasilkan ringkasan yang bisa dibaca."
+        return 1
+    fi
+
+    # Selisih dihitung di node (JSON sudah di tangan) supaya tidak ada parsing
+    # rapuh di bash.
+    local diff_out
+    diff_out="$(SEKARANG="$(eh_baca | tr '\n' ' ')" JSON="$json" node -e '
+        const json = JSON.parse(process.env.JSON);
+        const skr = new Map((process.env.SEKARANG||"").trim().split(/\s+/).filter(Boolean)
+            .map(s => s.split("|")).map(([h,i]) => [h,i]));
+        const usul = new Map(json.pin.map(p => [p.host, p.ip]));
+        const tambah = [...usul].filter(([h]) => !skr.has(h));
+        const ubah   = [...usul].filter(([h,i]) => skr.has(h) && skr.get(h) !== i);
+        const hapus  = [...skr].filter(([h]) => !usul.has(h));
+        for (const [h,i] of tambah) console.log("  + tambah  " + h + "  -> " + i);
+        for (const [h,i] of ubah)   console.log("  ~ ubah    " + h + "  " + skr.get(h) + " -> " + i);
+        for (const [h,i] of hapus)  console.log("  - hapus   " + h + "  (" + i + ")  jalur publik sudah pulih / tidak perlu lagi");
+        console.log("#N#" + (tambah.length + ubah.length + hapus.length));
+        console.log("#LIST#" + JSON.stringify([...usul]));
+    ')" || { log_error "Gagal menghitung selisih."; return 1; }
+
+    echo ""
+    log_info "=== Usulan perubahan daftar extra-hosts ==="
+    echo "$diff_out" | grep -v '^#'
+    local n; n="$(echo "$diff_out" | grep '^#N#' | sed 's|^#N#||')"
+    if [[ "$n" == "0" ]]; then
+        log_ok "Tidak ada perubahan — daftar saat ini sudah sesuai keadaan jaringan."
+        return 0
+    fi
+
+    echo ""
+    log_warn "Angka ini hasil SATU kali pengukuran. Simpul yang kebetulan sedang"
+    log_warn "gangguan sesaat bisa muncul di sini. Kalau selisihnya cuma satu-dua"
+    log_warn "entri dan Anda tidak menduga ada perubahan, lebih aman ukur ulang dulu."
+    confirm "Tulis daftar baru ke extra-hosts.conf?" || { log_info "Dibatalkan — tidak ada yang diubah."; return 0; }
+
+    local cadangan
+    if [[ -f "$EXTRA_HOSTS_CONF" ]]; then
+        cadangan="${EXTRA_HOSTS_CONF}.bak-$(date +%Y%m%d-%H%M%S)"
+        cp "$EXTRA_HOSTS_CONF" "$cadangan"
+        log_info "Daftar lama dicadangkan: $(basename "$cadangan")"
+    fi
+    {
+        echo "# DIHASILKAN menu \"Survei jangkauan simpul\" pada $(date '+%Y-%m-%d %H:%M:%S')."
+        echo "# Boleh disunting tangan; survei berikutnya akan menampilkan selisihnya"
+        echo "# lebih dulu dan tidak menimpa tanpa persetujuan."
+        echo "#"
+        echo "# Tiap baris: <nama-host>  <ip-internal>"
+        echo "# Alasan: jalur publik simpul ini tidak menjawab, jalur internal menjawab."
+        echo "# Lihat extra-hosts.conf.example untuk latar belakang lengkapnya."
+        echo "$diff_out" | grep '^#LIST#' | sed 's|^#LIST#||' | node -e '
+            let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
+                for (const [h,i] of JSON.parse(s)) console.log(h.padEnd(40) + i);
+            });'
+    } > "$EXTRA_HOSTS_CONF"
+    log_ok "extra-hosts.conf ditulis ($(eh_jumlah) entri)."
+
+    eh_terapkan
+}
+
+action_extra_hosts() {
+    while :; do
+        echo ""
+        log_info "=== Daftar extra-hosts (simpul yang dipaksa ke alamat internal) ==="
+        local n; n="$(eh_jumlah)"
+        if [[ "$n" == "0" ]]; then
+            log_info "Kosong — tidak ada simpul yang disematkan."
+        else
+            eh_baca | awk -F'|' '{ printf "  %-42s -> %s\n", $1, $2 }'
+            echo "  ($n entri)"
+            if [[ "${COMPOSE_FILE:-}" != *"docker-compose.extra-hosts.yml"* ]]; then
+                log_warn "BELUM AKTIF — docker-compose.extra-hosts.yml tidak tercantum di COMPOSE_FILE."
+            fi
+        fi
+        echo ""
+        echo "  s) Survei ulang & perbarui daftar (1-3 menit)"
+        echo "  t) Terapkan daftar sekarang (recreate app + harvester)"
+        echo "  p) Periksa cepat daftar yang ada (beberapa detik)"
+        echo "  0) Kembali"
+        local p
+        read -rp "Pilih: " p
+        case "$p" in
+            s|S) action_survei_jangkauan || true ;;
+            t|T) eh_terapkan || true ;;
+            p|P) "$SCRIPT_DIR/scripts/periksa-extra-hosts.sh" --verbose || true ;;
+            0|"") return 0 ;;
+            *) log_warn "Pilihan tidak dikenal." ;;
+        esac
+    done
+}
+
 # ── Rute proxy tambahan ─────────────────────────────────────────────────────
 # Menempatkan aplikasi LAIN di sub-path domain yang sama, mis.
 # https://<DOMAIN>/persetujuan-hln -> container portal-dgig:3000.
@@ -1817,6 +2048,7 @@ main_menu() {
         echo "20) Deploy APP SAJA (tanpa harvester — pakai harvester pihak lain)"
         echo "21) Hentikan harvester + tumpukan datanya (app tetap jalan)"
         echo "22) Rute proxy tambahan (pasang aplikasi lain di sub-path domain ini)"
+        echo "23) Jangkauan simpul (daftar extra-hosts: survei, terapkan, periksa)"
         echo "0)  Keluar"
         read -rp "Pilih menu: " choice
         case "$choice" in
@@ -1842,6 +2074,7 @@ main_menu() {
             20) check_env && action_deploy_app_only ;;
             21) check_env && action_down_harvester ;;
             22) check_env && action_rute_tambahan ;;
+            23) check_env && action_extra_hosts ;;
             0) exit 0 ;;
             *) log_warn "Pilihan tidak valid." ;;
         esac

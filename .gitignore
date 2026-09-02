@@ -8,6 +8,12 @@ certbot/www/*
 !certbot/conf/.gitkeep
 !certbot/www/.gitkeep
 nginx/conf.d/default.conf
+# Daftar extra-hosts & overlay turunannya — spesifik per instalasi (bergantung
+# topologi jaringan server), sama seperti default.conf. Contohnya TETAP
+# dilacak: extra-hosts.conf.example.
+extra-hosts.conf
+extra-hosts.conf.bak-*
+docker-compose.extra-hosts.yml
 nginx/conf.d/default.conf.bak-*
 # Rute proxy tambahan (deploy.sh menu 22) — isinya spesifik per instalasi,
 # sama seperti default.conf. Foldernya sendiri TETAP dilacak lewat .gitkeep
