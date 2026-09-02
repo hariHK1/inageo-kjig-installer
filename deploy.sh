@@ -194,8 +194,34 @@ check_env() {
     elif [[ -n "${APP_BASE_PATH:-}" ]]; then
         log_error "APP_BASE_PATH='${APP_BASE_PATH}' belum punya varian image. CI baru membangun varian untuk '/peta' — tambahkan build baru di .github/workflows/release.yml (repo source) kalau butuh sub-path lain."
         missing=1
+        # Tetap didefinisikan walau nilainya tidak akan dipakai: `set -u`
+        # aktif di skrip ini (baris 6), dan rujukan di bawah akan
+        # menghentikan SELURUH skrip dgn "unbound variable" kalau cabang
+        # ini yang jalan.
+        export APP_IMAGE_TAG_SUFFIX=""
     else
         export APP_IMAGE_TAG_SUFFIX=""
+    fi
+
+    # DITULIS JUGA KE .env, bukan cuma diexport ke proses ini.
+    #
+    # docker-compose.yml membaca ${APP_IMAGE_TAG_SUFFIX:-} untuk menyusun tag
+    # image app. Kalau nilainya hanya hidup di environment deploy.sh, maka
+    # `docker compose up/pull/ps` yang dijalankan LANGSUNG — hal biasa saat
+    # menelusuri masalah — melihatnya kosong dan diam-diam memakai varian
+    # ROOT pada instalasi sub-path. Terjadi nyata di dev: `docker compose up
+    # -d --force-recreate app` mencoba menarik <versi> polos, bukan
+    # <versi>-peta. Kebetulan registry menolak karena belum login, jadi
+    # ketahuan; kalau sudah login, container akan naik dgn image SALAH tanpa
+    # satu pun peringatan, dan gejalanya cuma 404 di mana-mana.
+    #
+    # Tetap DITURUNKAN dari APP_BASE_PATH, tidak pernah diisi manual —
+    # menuliskannya di sini membuat keduanya sinkron ulang setiap kali
+    # deploy.sh jalan, sekaligus bisa dibaca compose langsung.
+    if [[ -z "${APP_BASE_PATH:-}" || "${APP_BASE_PATH:-}" == "/peta" ]] &&
+       [[ "${APP_IMAGE_TAG_SUFFIX:-}" != "$(grep -m1 '^APP_IMAGE_TAG_SUFFIX=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)" ]]; then
+        env_set_kv APP_IMAGE_TAG_SUFFIX "$APP_IMAGE_TAG_SUFFIX"
+        log_info "APP_IMAGE_TAG_SUFFIX di .env disamakan jadi '${APP_IMAGE_TAG_SUFFIX:-<kosong>}' (diturunkan dari APP_BASE_PATH)."
     fi
 
     # Tiga secret disamakan pola cek/generate-nya (mirror source repo).
