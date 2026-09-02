@@ -206,6 +206,17 @@ server {
         include /etc/nginx/snippets/proxy-common.conf;
     }
 
+    # ── Rute proxy tambahan ─────────────────────────────────────────────
+    # Dikelola lewat deploy.sh menu 22, disimpan sbg berkas terpisah di
+    # nginx/snippets/rute-tambahan/. SENGAJA di luar berkas ini: default.conf
+    # DIHASILKAN dan ditulis ulang setiap kali APP_BASE_PATH berubah, sehingga
+    # blok yang disunting tangan di dalamnya hilang tanpa peringatan. Terjadi
+    # nyata di dev: rute /persetujuan-hln yang ditulis manual lenyap setelah
+    # satu kali deploy dan portalnya mati diam-diam.
+    #
+    # Wildcard, bukan berkas tunggal: nginx TIDAK error kalau tidak ada satu
+    # pun berkas yang cocok, jadi instalasi tanpa rute tambahan tetap start.
+    include /etc/nginx/snippets/rute-tambahan/*.conf;
     # __ROOT_GUARD__
     # Kalau APP_BASE_PATH diisi, deploy.sh mengganti baris penanda ini dengan
     # `location / { return 404; }` — kalau kosong, barisnya dihapus.

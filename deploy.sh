@@ -1441,6 +1441,260 @@ action_renew_tls() {
         && log_ok "Sertifikat diperbarui dan nginx sudah reload."
 }
 
+# ── Rute proxy tambahan ─────────────────────────────────────────────────────
+# Menempatkan aplikasi LAIN di sub-path domain yang sama, mis.
+# https://<DOMAIN>/persetujuan-hln -> container portal-dgig:3000.
+#
+# KENAPA BUKAN DISUNTING LANGSUNG DI default.conf. Berkas itu DIHASILKAN
+# deploy.sh dan ditulis ulang setiap kali APP_BASE_PATH berubah — suntingan
+# tangan di dalamnya hilang tanpa peringatan. Terjadi nyata: blok
+# /persetujuan-hln yang ditulis manual lenyap setelah satu kali deploy, dan
+# portalnya mati diam-diam. Berkas di RUTE_DIR tidak pernah tersentuh
+# regenerasi, dan di-include lewat wildcard yang aman walau kosong.
+RUTE_DIR="$SCRIPT_DIR/nginx/snippets/rute-tambahan"
+
+# Nama variabel nginx & nama berkas diturunkan dari path, bukan diminta
+# terpisah — supaya tidak mungkin ada dua rute dgn nama berkas sama tapi path
+# berbeda (atau sebaliknya).
+rute_slug() {
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed 's|^/||; s|[^a-z0-9]|_|g; s|^_*||; s|_*$||'
+}
+
+rute_daftar_path() {
+    [[ -d "$RUTE_DIR" ]] || return 0
+    grep -h '^# path *: ' "$RUTE_DIR"/*.conf 2>/dev/null | sed 's|^# path *: ||'
+}
+
+# Path yang TIDAK boleh dipakai rute tambahan. Ditampilkan ke operator sebelum
+# ia mengetik, bukan cuma dipakai menolak sesudahnya.
+rute_path_terlarang() {
+    echo "/"
+    echo "/error.html"
+    if [[ -n "${APP_BASE_PATH:-}" ]]; then
+        echo "${APP_BASE_PATH}   (aplikasi ini)"
+    else
+        echo "/apis            (aplikasi ini)"
+        echo "/_next           (aplikasi ini)"
+        echo "/sample-csw.json (aplikasi ini)"
+    fi
+    local sudah
+    while read -r sudah; do
+        [[ -n "$sudah" ]] && echo "${sudah}   (sudah dipakai rute lain)"
+    done < <(rute_daftar_path)
+}
+
+# Mengembalikan 0 kalau path BOLEH dipakai; kalau tidak, menjelaskan alasannya.
+rute_path_valid() {
+    local p="$1"
+    if [[ ! "$p" =~ ^/[A-Za-z0-9._~-]+(/[A-Za-z0-9._~-]+)*$ ]]; then
+        log_error "Format salah — harus diawali '/', TANPA '/' di akhir, hanya huruf/angka/._~- mis. /persetujuan-hln"
+        return 1
+    fi
+    if [[ -n "${APP_BASE_PATH:-}" && ( "$p" == "$APP_BASE_PATH" || "$p" == "$APP_BASE_PATH"/* ) ]]; then
+        log_error "'$p' berada di dalam APP_BASE_PATH ('$APP_BASE_PATH') — itu milik aplikasi ini."
+        return 1
+    fi
+    if [[ -z "${APP_BASE_PATH:-}" ]]; then
+        # Dipasang di root: seluruh domain milik aplikasi ini KECUALI sub-path
+        # yang dipesan rute tambahan. Yang dilarang cuma jalur internalnya.
+        case "$p" in
+            /apis|/apis/*|/_next|/_next/*|/sample-csw.json)
+                log_error "'$p' dipakai internal oleh aplikasi ini."
+                return 1 ;;
+        esac
+    fi
+    local sudah
+    while read -r sudah; do
+        if [[ "$p" == "$sudah" || "$p" == "$sudah"/* || "$sudah" == "$p"/* ]]; then
+            log_error "'$p' bertabrakan dgn rute yang sudah ada: '$sudah'"
+            return 1
+        fi
+    done < <(rute_daftar_path)
+    return 0
+}
+
+rute_list() {
+    if [[ ! -d "$RUTE_DIR" ]] || ! ls "$RUTE_DIR"/*.conf >/dev/null 2>&1; then
+        log_info "Belum ada rute proxy tambahan."
+        return 0
+    fi
+    local f
+    for f in "$RUTE_DIR"/*.conf; do
+        printf '  %-28s -> %-28s (%s)\n' \
+            "$(grep -m1 '^# path *: ' "$f" | sed 's|^# path *: ||')" \
+            "$(grep -m1 '^# tujuan *: ' "$f" | sed 's|^# tujuan *: ||')" \
+            "$(basename "$f")"
+    done
+}
+
+rute_tambah() {
+    echo ""
+    log_info "Path yang TIDAK boleh dipakai:"
+    rute_path_terlarang | sed 's|^|    |'
+    echo ""
+
+    local path svc port nextjs slug file inc
+    read -rp "Path sub-path baru (mis. /persetujuan-hln): " path
+    [[ -z "$path" ]] && { log_warn "Dibatalkan."; return 1; }
+    rute_path_valid "$path" || return 1
+
+    read -rp "Nama service/container tujuan (mis. portal-dgig): " svc
+    [[ -z "$svc" ]] && { log_warn "Dibatalkan."; return 1; }
+    read -rp "Port di dalam container tujuan [3000]: " port
+    port="${port:-3000}"
+    if [[ ! "$port" =~ ^[0-9]+$ ]]; then
+        log_error "Port '$port' bukan angka."
+        return 1
+    fi
+
+    # Tujuan diuji DARI DALAM container nginx, bukan dari host — rute dan DNS
+    # keduanya berbeda, dan nginx-lah yang nanti harus bisa menjangkaunya.
+    local alamat
+    alamat="$($COMPOSE_CMD exec -T nginx getent hosts "$svc" 2>/dev/null | awk '{print $1}' | sort -u)"
+    if [[ -z "$alamat" ]]; then
+        log_warn "nginx TIDAK bisa menyelesaikan nama '$svc' — kemungkinan besar container itu tidak berada di network yang sama."
+        log_warn "Docker bisa menyambungkannya sekarang, TAPI sambungan itu HILANG begitu container tujuan dibuat ulang."
+        log_warn "Perbaikan yang bertahan: deklarasikan network ini di docker-compose milik aplikasi tujuan."
+        if confirm "Sambungkan container '$svc' ke network web sekarang (sementara)?"; then
+            local net
+            net="$($COMPOSE_CMD ps -q nginx | head -1 | xargs -r docker inspect \
+                   -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' | grep -m1 '_web$')"
+            if [[ -z "$net" ]]; then
+                log_error "Network 'web' milik stack ini tidak ketemu."
+                return 1
+            fi
+            docker network connect "$net" "$svc" 2>&1 | sed 's|^|    |' || true
+            alamat="$($COMPOSE_CMD exec -T nginx getent hosts "$svc" 2>/dev/null | awk '{print $1}' | sort -u)"
+        fi
+    fi
+    if [[ -z "$alamat" ]]; then
+        log_error "'$svc' tetap tidak bisa dijangkau nginx — rute dibatalkan (config yang menunjuk nama mati akan membuat nginx gagal saat request)."
+        return 1
+    fi
+
+    # Peringatan tabrakan nama — pelajaran mahal dari lapangan: nama service
+    # hanya unik DI DALAM satu proyek compose. Kalau network dipakai bersama,
+    # satu nama bisa menunjuk beberapa container dan DNS menjawab bergantian,
+    # sehingga rute ini akan "kadang benar kadang salah" tanpa jejak di log.
+    local jumlah
+    jumlah="$(printf '%s\n' "$alamat" | grep -c .)"
+    if [[ "$jumlah" -gt 1 ]]; then
+        log_warn "Nama '$svc' menunjuk $jumlah alamat: $(printf '%s ' $alamat)"
+        log_warn "Kalau itu BUKAN replica dari satu service yang sama, rute ini akan sesekali mendarat di container yang salah."
+        confirm "Tetap lanjutkan?" || return 1
+    else
+        log_ok "nginx bisa menjangkau '$svc' di $alamat."
+    fi
+
+    read -rp "Tujuan adalah aplikasi Next.js (punya /_next/static)? [y/N] " nextjs
+
+    slug="$(rute_slug "$path")"
+    file="$RUTE_DIR/$slug.conf"
+    if [[ -e "$file" ]]; then
+        log_error "Berkas $file sudah ada."
+        return 1
+    fi
+    inc="/etc/nginx/snippets/proxy-common.conf"
+    [[ "${BEHIND_WAF:-false}" == "true" ]] && inc="/etc/nginx/snippets/proxy-common-waf.conf"
+
+    mkdir -p "$RUTE_DIR"
+    {
+        echo "# DIHASILKAN deploy.sh — menu \"Rute proxy tambahan\". Jangan disunting"
+        echo "# tangan: tambah/hapus lewat menu itu supaya validasi path ikut jalan."
+        echo "# path   : $path"
+        echo "# tujuan : $svc:$port"
+        echo "# dibuat : $(date '+%Y-%m-%d %H:%M:%S')"
+        echo ""
+        echo "set \$rute_$slug http://$svc:$port;"
+        echo ""
+        echo "# Blok exact WAJIB terpisah: 'location $path/' (dgn garis miring) TIDAK"
+        echo "# cocok dgn request ke '$path' polos — dan pada aplikasi Next.js"
+        echo "# ber-basePath, justru itulah URL kanoniknya."
+        echo "location = $path {"
+        echo "    proxy_pass \$rute_$slug\$request_uri;"
+        echo "    include $inc;"
+        echo "}"
+        echo ""
+        if [[ "$nextjs" =~ ^[Yy]$ ]]; then
+            echo "# Aset build Next.js — ber-hash, aman di-cache lama. Kunci cache diberi"
+            echo "# awalan literal karena zona 'static_cache' dipakai bersama semua rute."
+            echo "location ^~ $path/_next/static/ {"
+            echo "    proxy_pass \$rute_$slug\$request_uri;"
+            echo "    include $inc;"
+            echo "    proxy_cache static_cache;"
+            echo "    proxy_cache_key \"${slug}\$request_uri\";"
+            echo "    proxy_cache_valid 200 30d;"
+            echo "    proxy_cache_lock on;"
+            echo "    add_header X-Nginx-Cache \$upstream_cache_status always;"
+            echo "}"
+            echo ""
+        fi
+        echo "# Prefiks BERGARIS-MIRING, sengaja: '$path' polos tanpa garis miring juga"
+        echo "# akan menangkap '${path}abc' dan path lain yang kebetulan berawalan sama."
+        echo "location ^~ $path/ {"
+        echo "    proxy_pass \$rute_$slug\$request_uri;"
+        echo "    include $inc;"
+        echo "}"
+    } > "$file"
+
+    log_info "Menguji konfigurasi nginx..."
+    if ! $COMPOSE_CMD exec -T nginx nginx -t; then
+        rm -f "$file"
+        log_error "Config baru TIDAK valid — berkas rute dihapus lagi, nginx tidak disentuh."
+        return 1
+    fi
+    $COMPOSE_CMD exec -T nginx nginx -s reload
+    log_ok "Rute $path -> $svc:$port aktif. Berkas: nginx/snippets/rute-tambahan/$slug.conf"
+}
+
+rute_hapus() {
+    if ! rute_list; then return 1; fi
+    if [[ ! -d "$RUTE_DIR" ]] || ! ls "$RUTE_DIR"/*.conf >/dev/null 2>&1; then
+        return 0
+    fi
+    local path file cadangan
+    read -rp "Path yang mau dihapus (persis seperti daftar di atas): " path
+    [[ -z "$path" ]] && { log_warn "Dibatalkan."; return 1; }
+    file="$RUTE_DIR/$(rute_slug "$path").conf"
+    if [[ ! -f "$file" ]]; then
+        log_error "Rute '$path' tidak ditemukan."
+        return 1
+    fi
+    confirm "Hapus rute '$path'?" || return 1
+
+    # Dicadangkan, bukan dihapus langsung — kalau ternyata salah hapus, isinya
+    # masih bisa dikembalikan tanpa mengetik ulang.
+    cadangan="$file.dihapus-$(date +%Y%m%d-%H%M%S)"
+    mv "$file" "$cadangan"
+    if ! $COMPOSE_CMD exec -T nginx nginx -t; then
+        mv "$cadangan" "$file"
+        log_error "nginx -t gagal setelah penghapusan — rute DIKEMBALIKAN, tidak ada yang berubah."
+        return 1
+    fi
+    $COMPOSE_CMD exec -T nginx nginx -s reload
+    log_ok "Rute '$path' dihapus. Cadangan: $(basename "$cadangan")"
+}
+
+action_rute_tambahan() {
+    while :; do
+        echo ""
+        log_info "=== Rute proxy tambahan (aplikasi lain di sub-path domain ini) ==="
+        rute_list
+        echo ""
+        echo "  a) Tambah rute"
+        echo "  h) Hapus rute"
+        echo "  0) Kembali"
+        local p
+        read -rp "Pilih: " p
+        case "$p" in
+            a|A) rute_tambah || true ;;
+            h|H) rute_hapus  || true ;;
+            0|"") return 0 ;;
+            *) log_warn "Pilihan tidak dikenal." ;;
+        esac
+    done
+}
+
 action_test_nginx() {
     $COMPOSE_CMD exec nginx nginx -t
 }
@@ -1499,6 +1753,7 @@ main_menu() {
         echo "19) Cek port yang listening di host (self-check lokal)"
         echo "20) Deploy APP SAJA (tanpa harvester — pakai harvester pihak lain)"
         echo "21) Hentikan harvester + tumpukan datanya (app tetap jalan)"
+        echo "22) Rute proxy tambahan (pasang aplikasi lain di sub-path domain ini)"
         echo "0)  Keluar"
         read -rp "Pilih menu: " choice
         case "$choice" in
@@ -1523,6 +1778,7 @@ main_menu() {
             19) action_check_exposed_ports ;;
             20) check_env && action_deploy_app_only ;;
             21) check_env && action_down_harvester ;;
+            22) check_env && action_rute_tambahan ;;
             0) exit 0 ;;
             *) log_warn "Pilihan tidak valid." ;;
         esac

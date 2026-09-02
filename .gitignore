@@ -8,6 +8,13 @@ certbot/www/*
 !certbot/conf/.gitkeep
 !certbot/www/.gitkeep
 nginx/conf.d/default.conf
+nginx/conf.d/default.conf.bak-*
+# Rute proxy tambahan (deploy.sh menu 22) — isinya spesifik per instalasi,
+# sama seperti default.conf. Foldernya sendiri TETAP dilacak lewat .gitkeep
+# supaya `include .../rute-tambahan/*.conf` di template selalu punya folder
+# yang ada, bahkan pada instalasi yang belum punya rute sama sekali.
+nginx/snippets/rute-tambahan/*
+!nginx/snippets/rute-tambahan/.gitkeep
 mapproxy/mapproxy.yaml
 mapproxy/layers-manifest.json
 
