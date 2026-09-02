@@ -1594,8 +1594,7 @@ action_survei_jangkauan() {
         return 1
     fi
     local diff_out
-    diff_out="$($COMPOSE_CMD exec -T -e SEKARANG="$(eh_baca | tr '
-' ' ')" -e JSON="$json" \
+    diff_out="$($COMPOSE_CMD exec -T -e SEKARANG="$(eh_baca | tr '\n' ' ')" -e JSON="$json" \
         harvester node < "$skrip_selisih")" || { log_error "Gagal menghitung selisih."; return 1; }
     echo ""
     log_info "=== Usulan perubahan daftar extra-hosts ==="
