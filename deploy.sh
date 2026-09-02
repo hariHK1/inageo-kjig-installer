@@ -1513,6 +1513,66 @@ rute_path_valid() {
     return 0
 }
 
+# Pastikan default.conf benar-benar meng-include folder rute.
+#
+# KENAPA PERLU DIPERIKSA TERPISAH. Baris include-nya ada di TEMPLATE, tapi
+# default.conf hanya dihasilkan ulang kalau cap APP_BASE_PATH-nya berubah.
+# Instalasi yang sudah berjalan karena itu TIDAK PERNAH menerima baris itu —
+# dan tanpanya berkas rute tidak pernah dibaca nginx.
+#
+# Yang membuatnya berbahaya: `nginx -t` tetap LOLOS. Config-nya memang valid,
+# cuma tidak memuat rutenya. Jadi menu ini melaporkan sukses, reload berhasil,
+# dan rutenya tetap 404. Terjadi nyata pada pemakaian pertama fitur ini.
+rute_pastikan_include() {
+    local INC='    include /etc/nginx/snippets/rute-tambahan/*.conf;'
+
+    if [[ ! -f "$NGINX_CONF" ]]; then
+        return 0   # belum ada; nanti dihasilkan dari template yang sudah memuatnya
+    fi
+    if grep -q 'snippets/rute-tambahan' "$NGINX_CONF"; then
+        return 0
+    fi
+
+    log_warn "nginx/conf.d/default.conf belum meng-include folder rute tambahan."
+    log_warn "Tanpa baris itu, rute yang dibuat di sini TIDAK akan aktif — dan"
+    log_warn "'nginx -t' tetap lolos, jadi kegagalannya tidak terlihat."
+    confirm "Sisipkan baris include itu sekarang?" || return 1
+
+    local cadangan
+    cadangan="${NGINX_CONF}.bak-$(date +%Y%m%d-%H%M%S)"
+    cp "$NGINX_CONF" "$cadangan"
+
+    # Disisipkan tepat setelah server_name — baris itu pasti ada di setiap
+    # config hasil template, dan posisinya di dalam blok server{} (syarat sah
+    # bagi directive `set`/`location` yang dibawa berkas rute).
+    #
+    # awk, bukan sed: nilai server_name berbeda tiap instalasi dan replacement
+    # multi-baris di sed butuh escaping yang mudah salah.
+    awk -v ins="$INC" '
+        { print }
+        !sudah && $0 ~ /^[[:space:]]*server_name[[:space:]]/ {
+            print ""
+            print "    # Rute proxy tambahan (deploy.sh menu 22) - disisipkan otomatis."
+            print ins
+            sudah = 1
+        }
+    ' "$cadangan" > "$NGINX_CONF"
+
+    if ! grep -q 'snippets/rute-tambahan' "$NGINX_CONF"; then
+        cp "$cadangan" "$NGINX_CONF"
+        log_error "Gagal menyisipkan (baris server_name tidak ketemu). Tambahkan manual di dalam blok server{}:"
+        log_error "$INC"
+        return 1
+    fi
+    if ! $COMPOSE_CMD exec -T nginx nginx -t; then
+        cp "$cadangan" "$NGINX_CONF"
+        log_error "nginx -t gagal setelah penyisipan — config DIKEMBALIKAN, tidak ada yang berubah."
+        return 1
+    fi
+    $COMPOSE_CMD exec -T nginx nginx -s reload
+    log_ok "Baris include disisipkan. Cadangan: $(basename "$cadangan")"
+}
+
 rute_list() {
     if [[ ! -d "$RUTE_DIR" ]] || ! ls "$RUTE_DIR"/*.conf >/dev/null 2>&1; then
         log_info "Belum ada rute proxy tambahan."
@@ -1676,6 +1736,9 @@ rute_hapus() {
 }
 
 action_rute_tambahan() {
+    # Diperiksa SEKALI di depan, sebelum operator sempat membuat rute yang
+    # tidak akan pernah aktif.
+    rute_pastikan_include || log_warn "Rute yang dibuat mungkin belum aktif sampai baris include itu ada."
     while :; do
         echo ""
         log_info "=== Rute proxy tambahan (aplikasi lain di sub-path domain ini) ==="
