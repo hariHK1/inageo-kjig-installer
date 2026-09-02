@@ -1584,24 +1584,19 @@ action_survei_jangkauan() {
         return 1
     fi
 
-    # Selisih dihitung di node (JSON sudah di tangan) supaya tidak ada parsing
-    # rapuh di bash.
+    # Selisih dihitung DI DALAM container, bukan di host: host tidak dijamin
+    # punya Node — dan memang tidak punya di server produksi. Pemakaian pertama
+    # menu ini gagal di titik ini setelah survei 3 menit selesai, sehingga
+    # hasilnya terbuang percuma.
+    local skrip_selisih="$SCRIPT_DIR/scripts/selisih-extra-hosts.js"
+    if [[ ! -f "$skrip_selisih" ]]; then
+        log_error "scripts/selisih-extra-hosts.js tidak ada — jalankan 'git pull' dulu."
+        return 1
+    fi
     local diff_out
-    diff_out="$(SEKARANG="$(eh_baca | tr '\n' ' ')" JSON="$json" node -e '
-        const json = JSON.parse(process.env.JSON);
-        const skr = new Map((process.env.SEKARANG||"").trim().split(/\s+/).filter(Boolean)
-            .map(s => s.split("|")).map(([h,i]) => [h,i]));
-        const usul = new Map(json.pin.map(p => [p.host, p.ip]));
-        const tambah = [...usul].filter(([h]) => !skr.has(h));
-        const ubah   = [...usul].filter(([h,i]) => skr.has(h) && skr.get(h) !== i);
-        const hapus  = [...skr].filter(([h]) => !usul.has(h));
-        for (const [h,i] of tambah) console.log("  + tambah  " + h + "  -> " + i);
-        for (const [h,i] of ubah)   console.log("  ~ ubah    " + h + "  " + skr.get(h) + " -> " + i);
-        for (const [h,i] of hapus)  console.log("  - hapus   " + h + "  (" + i + ")  jalur publik sudah pulih / tidak perlu lagi");
-        console.log("#N#" + (tambah.length + ubah.length + hapus.length));
-        console.log("#LIST#" + JSON.stringify([...usul]));
-    ')" || { log_error "Gagal menghitung selisih."; return 1; }
-
+    diff_out="$($COMPOSE_CMD exec -T -e SEKARANG="$(eh_baca | tr '
+' ' ')" -e JSON="$json" \
+        harvester node < "$skrip_selisih")" || { log_error "Gagal menghitung selisih."; return 1; }
     echo ""
     log_info "=== Usulan perubahan daftar extra-hosts ==="
     echo "$diff_out" | grep -v '^#'
@@ -1631,10 +1626,7 @@ action_survei_jangkauan() {
         echo "# Tiap baris: <nama-host>  <ip-internal>"
         echo "# Alasan: jalur publik simpul ini tidak menjawab, jalur internal menjawab."
         echo "# Lihat extra-hosts.conf.example untuk latar belakang lengkapnya."
-        echo "$diff_out" | grep '^#LIST#' | sed 's|^#LIST#||' | node -e '
-            let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
-                for (const [h,i] of JSON.parse(s)) console.log(h.padEnd(40) + i);
-            });'
+        echo "$diff_out" | grep '^#CONF#' | sed 's|^#CONF#||'
     } > "$EXTRA_HOSTS_CONF"
     log_ok "extra-hosts.conf ditulis ($(eh_jumlah) entri)."
 
