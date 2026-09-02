@@ -323,7 +323,25 @@ ensure_nginx_conf() {
     local cap_diminta="${APP_BASE_PATH:-}"
     local cap_terpasang=""
     if [[ -f "$NGINX_CONF" ]]; then
-        cap_terpasang="$(sed -n 's/^# deploy\.sh:APP_BASE_PATH=\(.*\)$//p' "$NGINX_CONF" | head -1)"
+        # grep+cut, BUKAN sed dengan backreference.
+        #
+        # Versi sebelumnya memakai sed dengan grup tangkap, dan teks
+        # penggantinya rusak menjadi satu karakter kendali saat berkas ini
+        # disunting lewat perkakas yang menafsirkan urutan escape di dalamnya.
+        # Akibatnya cap TIDAK PERNAH cocok: default.conf ditulis ulang di
+        # SETIAP deploy, dan suntingan tangan di dalamnya hilang tanpa
+        # peringatan apa pun.
+        #
+        # Terjadi nyata dua kali: blok rute /persetujuan-hln di server dev
+        # lenyap setelah satu deploy, dan di produksi berkasnya ditulis ulang
+        # padahal capnya sudah benar (kebetulan isinya identik, jadi tidak ada
+        # yang hilang — tapi itu keberuntungan, bukan rancangan).
+        #
+        # Bentuk di bawah tidak punya grup tangkap sama sekali, jadi tidak ada
+        # yang bisa rusak diam-diam. tr -d menjaga kalau berkasnya kebetulan
+        # ber-akhir-baris CRLF, yang membuat nilainya membawa karakter tak
+        # kasatmata di ujung dan tidak akan pernah sama dengan yang diminta.
+        cap_terpasang="$(grep -m1 '^# deploy.sh:APP_BASE_PATH=' "$NGINX_CONF" | cut -d= -f2- | tr -d '\r')"
         if [[ "$cap_terpasang" == "$cap_diminta" ]]; then
             return 0
         fi
