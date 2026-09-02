@@ -6,9 +6,10 @@
 # mati, jadi cron/monitoring bisa memicu alarm dari situ tanpa perlu membaca
 # teksnya.
 #
-# Pemakaian:
-#     ./scripts/periksa-extra-hosts.sh              # ringkas, untuk cron
-#     ./scripts/periksa-extra-hosts.sh --verbose    # selalu cetak hasil
+# Pemakaian (lewat `bash`, karena repo ini tidak melacak bit executable —
+# checkout di server menghasilkan berkas non-executable):
+#     bash scripts/periksa-extra-hosts.sh              # ringkas, untuk cron
+#     bash scripts/periksa-extra-hosts.sh --verbose    # selalu cetak hasil
 #
 # Contoh entri cron (tiap 6 jam, hasilnya masuk syslog):
 #     0 */6 * * *  cd /home/adminhi/inageo-kjig-installer && \

@@ -1656,7 +1656,12 @@ action_extra_hosts() {
         case "$p" in
             s|S) action_survei_jangkauan || true ;;
             t|T) eh_terapkan || true ;;
-            p|P) "$SCRIPT_DIR/scripts/periksa-extra-hosts.sh" --verbose || true ;;
+            # Dipanggil lewat `bash`, BUKAN dieksekusi langsung: repo ini tidak
+            # melacak bit executable (semua skrip tercatat 100644), sehingga
+            # checkout di server menghasilkan berkas non-executable dan
+            # pemanggilan langsung gagal dgn "Permission denied". Terjadi pada
+            # pemakaian pertama menu ini.
+            p|P) bash "$SCRIPT_DIR/scripts/periksa-extra-hosts.sh" --verbose || true ;;
             0|"") return 0 ;;
             *) log_warn "Pilihan tidak dikenal." ;;
         esac

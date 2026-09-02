@@ -135,7 +135,7 @@ Daftar ini bisa basi diam-diam: IP internal berubah, atau jalur publik pulih dan
 ```bash
 # tiap 6 jam, hasilnya ke syslog
 0 */6 * * *  cd /home/adminhi/inageo-kjig-installer && \
-             ./scripts/periksa-extra-hosts.sh 2>&1 | logger -t extra-hosts
+             bash scripts/periksa-extra-hosts.sh 2>&1 | logger -t extra-hosts
 ```
 
 Skrip ini **berjalan sunyi kalau semuanya baik** dan hanya berbicara saat ada yang perlu ditindak. Kode keluarnya: `0` sehat, `1` ada simpul yang benar-benar mati. Entri yang pin-nya sudah tidak diperlukan dilaporkan tapi **tidak** membuat kode keluarnya 1 — alarm yang berbunyi untuk hal tidak mendesak akan diabaikan orang, lalu berhenti berguna justru saat dibutuhkan.
