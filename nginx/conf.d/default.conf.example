@@ -132,6 +132,19 @@ server {
     gzip_min_length 1024;
     gzip_types application/javascript application/json text/css image/svg+xml application/xml;
 
+    # Brotli SEBAGAI TAMBAHAN gzip, bukan pengganti — peramban yang tidak
+    # kirim "br" di Accept-Encoding otomatis jatuh ke gzip di atas, nginx
+    # yang memilih sendiri sesuai permintaan klien, jadi tidak ada risiko
+    # putus kompatibilitas. Butuh image nginx custom (lihat nginx/Dockerfile
+    # di repo source) — modul ini TIDAK ADA di image nginx resmi mana pun.
+    # brotli_static SENGAJA belum diaktifkan — itu perlu berkas .br yang
+    # sudah dikompres saat build, belum ada langkahnya; brotli_comp_level
+    # 5 di sini artinya kompres on-the-fly tiap request, sama seperti gzip
+    # di atas.
+    brotli on;
+    brotli_comp_level 5;
+    brotli_types application/javascript application/json text/css image/svg+xml application/xml;
+
     # Variabel (bukan host literal) — memaksa nginx resolve ulang lewat
     # `resolver` di atas, bukan cache sekali di startup.
     # `inageo-app` = alias jaringan KHUSUS milik service app kita (lihat

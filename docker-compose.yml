@@ -168,7 +168,12 @@ services:
     # (bypass nginx) ada di docker-compose.ports.yml, opsional.
 
   nginx:
-    image: nginx:1.27-alpine
+    # nginx:1.27-alpine RESMI + modul dinamis Brotli — dibangun & di-push CI
+    # yang SAMA dengan app/harvester (lihat .github/workflows/release.yml di
+    # repo source), jadi versinya ikut RELEASE_VERSION yang sama. Modul ini
+    # TIDAK ADA di image nginx resmi mana pun — lihat nginx/Dockerfile (repo
+    # source) untuk alasan & cara build-nya.
+    image: ghcr.io/${GHCR_OWNER}/${GHCR_REPO}-nginx:${RELEASE_VERSION}
     restart: unless-stopped
     deploy:
       resources:
