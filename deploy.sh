@@ -636,7 +636,7 @@ action_pull() {
     unset ghcr_token ghcr_username
     log_info "Pull image versi $RELEASE_VERSION..."
     local pull_rc=0
-    $COMPOSE_CMD pull app harvester harvester-seed || pull_rc=1
+    $COMPOSE_CMD pull app harvester harvester-seed nginx || pull_rc=1
 
     # Logout SELALU dijalankan, sukses maupun gagal. `docker login` di atas
     # menuliskan kredensial ke ~/.docker/config.json sebagai base64 — itu
@@ -817,7 +817,13 @@ siapkan_image() {
     local versi="$1" cakupan="${2:-semua}"
     local dasar="ghcr.io/${GHCR_OWNER}/${GHCR_REPO}"
     local -a butuh=("${dasar}-app:${versi}")
-    [[ "$cakupan" != "app" ]] && butuh+=("${dasar}-harvester:${versi}")
+    # nginx IKUT diversikan sejak image-nya tidak lagi nginx resmi melainkan
+    # build sendiri (nginx + modul Brotli, lihat nginx/Dockerfile di repo
+    # source). Tanpa baris ini, default.conf yang memuat direktif `brotli`
+    # dipasang di atas nginx lama yang tidak punya modulnya — `nginx -t`
+    # gagal, config baru ditolak, dan container TIDAK BISA START lagi kalau
+    # kebetulan restart. Terjadi nyata saat v0.2.78-dev dipasang di dev-kjig.
+    [[ "$cakupan" != "app" ]] && butuh+=("${dasar}-harvester:${versi}" "${dasar}-nginx:${versi}")
 
     local ref lengkap=true
     for ref in "${butuh[@]}"; do
@@ -1174,7 +1180,15 @@ action_set_version() {
     # upgrade lewat menu ini akan menghasilkan nginx yang melayani di root
     # sementara image-nya varian sub-path — situs mati total, tanpa peringatan.
     ensure_nginx_conf
-    $COMPOSE_CMD up -d --no-deps --force-recreate app harvester
+    # nginx WAJIB ikut di-recreate, bukan cuma app+harvester: image-nya
+    # sekarang ikut ${RELEASE_VERSION} (nginx + modul Brotli). Kalau cuma
+    # config-nya yang diperbarui sementara container-nya tetap image versi
+    # lama, direktif `brotli` jadi "unknown directive" — persis kegagalan
+    # saat v0.2.78-dev dipasang pertama kali di dev-kjig.
+    $COMPOSE_CMD up -d --no-deps --force-recreate app harvester nginx
+    # Setelah --force-recreate, nginx sudah start dgn config terbaru; muat
+    # ulang di bawah tinggal jaring pengaman untuk kasus config berubah
+    # TANPA image berubah (mis. rute proxy tambahan lewat menu 22).
     muat_ulang_nginx_kalau_perlu || log_warn "nginx belum memakai config baru — lihat pesan di atas."
     $COMPOSE_CMD ps
     action_harvester_migrate || log_warn "Migrasi otomatis gagal — jalankan manual lewat menu 14."
