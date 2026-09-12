@@ -53,6 +53,30 @@ log_format redacted '$remote_addr - $remote_user [$time_local] '
 
 
 
+# Kompresi ditaruh di level http, BUKAN di dalam satu blok server.
+#
+# Sebelumnya keduanya hanya ada di server{} aplikasi, sementara
+# snippets/proxy-common*.conf (yang mengosongkan Accept-Encoding ke
+# upstream) di-include SEMUA blok server termasuk dashboard internal
+# GlitchTip :8443 dan Uptime Kuma :8444. Akibatnya upstream berhenti
+# mengompres tapi nginx tidak menggantikannya -> jawaban vhost itu
+# terkirim polos. Di sini satu definisi berlaku untuk semuanya.
+gzip on;
+gzip_min_length 1024;
+gzip_types application/javascript application/json text/css image/svg+xml application/xml;
+# Brotli SEBAGAI TAMBAHAN gzip, bukan pengganti — peramban yang tidak
+# kirim "br" di Accept-Encoding otomatis jatuh ke gzip di atas, nginx
+# yang memilih sendiri sesuai permintaan klien, jadi tidak ada risiko
+# putus kompatibilitas. Butuh image nginx custom (lihat nginx/Dockerfile
+# di repo source) — modul ini TIDAK ADA di image nginx resmi mana pun.
+# brotli_static SENGAJA belum diaktifkan — itu perlu berkas .br yang
+# sudah dikompres saat build, belum ada langkahnya; brotli_comp_level
+# 5 di sini artinya kompres on-the-fly tiap request, sama seperti gzip
+# di atas.
+brotli on;
+brotli_comp_level 5;
+brotli_types application/javascript application/json text/css image/svg+xml application/xml;
+
 # ── :80 — ACME challenge + redirect ke HTTPS ────────────────────────────────
 server {
     listen 80;
@@ -128,22 +152,6 @@ server {
     limit_conn perip 40;
 
     client_max_body_size 32m;
-    gzip on;
-    gzip_min_length 1024;
-    gzip_types application/javascript application/json text/css image/svg+xml application/xml;
-
-    # Brotli SEBAGAI TAMBAHAN gzip, bukan pengganti — peramban yang tidak
-    # kirim "br" di Accept-Encoding otomatis jatuh ke gzip di atas, nginx
-    # yang memilih sendiri sesuai permintaan klien, jadi tidak ada risiko
-    # putus kompatibilitas. Butuh image nginx custom (lihat nginx/Dockerfile
-    # di repo source) — modul ini TIDAK ADA di image nginx resmi mana pun.
-    # brotli_static SENGAJA belum diaktifkan — itu perlu berkas .br yang
-    # sudah dikompres saat build, belum ada langkahnya; brotli_comp_level
-    # 5 di sini artinya kompres on-the-fly tiap request, sama seperti gzip
-    # di atas.
-    brotli on;
-    brotli_comp_level 5;
-    brotli_types application/javascript application/json text/css image/svg+xml application/xml;
 
     # Variabel (bukan host literal) — memaksa nginx resolve ulang lewat
     # `resolver` di atas, bukan cache sekali di startup.
