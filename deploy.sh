@@ -1148,6 +1148,39 @@ muat_ulang_nginx_kalau_perlu() {
     fi
 }
 
+# Deteksi IP publik KELUAR (egress) container harvester & tulis ke .env
+# sbg IP_PUBLIC — dipakai pesan kegagalan harvest memberi tahu operator SJ
+# persis IP mana yang perlu di-whitelist (lihat catatan lengkap di
+# .env.example & HARVESTER_PUBLIC_IP di repo source, ssrf-guard.ts).
+#
+# DARI DALAM container harvester (docker compose exec), BUKAN dari host —
+# supaya persis jalur NAT/egress yang sungguhan dipakai request harvest,
+# bukan asumsi keduanya sama (bisa beda kalau host punya multi-NIC/VPN).
+#
+# Best-effort & TIDAK PERNAH menggagalkan ganti versi: layanan "what's my
+# IP" eksternal bisa down/jaringan DC bermasalah sementara — kegagalan di
+# sini cukup diperingatkan, .env tetap memakai nilai lama (bukan ditimpa
+# kosong, supaya pesan kegagalan tidak mendadak kehilangan info yang
+# sebelumnya sudah benar).
+perbarui_ip_publik() {
+    local ip
+    ip="$($COMPOSE_CMD exec -T harvester curl -s --max-time 10 https://ifconfig.me 2>/dev/null)"
+    if [[ -z "$ip" ]]; then
+        ip="$($COMPOSE_CMD exec -T harvester curl -s --max-time 10 https://icanhazip.com 2>/dev/null | tr -d '\r\n')"
+    fi
+    if [[ -z "$ip" ]] || ! [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        log_warn "Gagal mendeteksi IP publik keluar harvester — IP_PUBLIC di .env TIDAK diubah (tetap: ${IP_PUBLIC:-belum diset})."
+        return 0
+    fi
+    if grep -q '^IP_PUBLIC=' "$ENV_FILE"; then
+        sed -i "s/^IP_PUBLIC=.*/IP_PUBLIC=$ip/" "$ENV_FILE"
+    else
+        echo "IP_PUBLIC=$ip" >> "$ENV_FILE"
+    fi
+    export IP_PUBLIC="$ip"
+    log_ok "IP publik keluar harvester terdeteksi: $ip (tersimpan ke .env sbg IP_PUBLIC)."
+}
+
 action_set_version() {
     local current="${RELEASE_VERSION:-(belum diset)}"
     log_info "Versi saat ini: $current"
@@ -1192,6 +1225,10 @@ action_set_version() {
     muat_ulang_nginx_kalau_perlu || log_warn "nginx belum memakai config baru — lihat pesan di atas."
     $COMPOSE_CMD ps
     action_harvester_migrate || log_warn "Migrasi otomatis gagal — jalankan manual lewat menu 14."
+    # SETELAH harvester recreate & migrasi (container-nya sudah pasti hidup
+    # & siap di-exec) — deteksi IP publik keluar terbaru, jaga-jaga NAT/IP DC
+    # berubah antar deploy. Best-effort, lihat catatan di fungsinya.
+    perbarui_ip_publik
     log_ok "Selesai — app & harvester sekarang di versi $new_version."
 }
 

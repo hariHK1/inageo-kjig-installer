@@ -441,6 +441,11 @@ services:
       # ke sini, semua lewat HTTP API harvester (lihat GET /search/* di source).
       ELASTICSEARCH_URL: http://elastic:${ELASTIC_PASSWORD}@elasticsearch:9200
       MAX_FEATURES_PER_LAYER: ${MAX_FEATURES_PER_LAYER:-50000}
+      # IP publik keluar harvester, dideteksi OTOMATIS oleh deploy.sh (menu
+      # "Ganti versi") — lihat catatan lengkap di .env.example & ssrf-guard.ts
+      # (repo source). Kosong = belum pernah dideteksi, pesan kegagalan
+      # harvest fallback tanpa menyebut IP (bukan error).
+      IP_PUBLIC: ${IP_PUBLIC:-}
       # Sama seperti SENTRY_DSN di service `app` — opsional, harvester tetap
       # jalan normal tanpanya. Var TERPISAH supaya error harvester & app bisa
       # dipisah jadi 2 project GlitchTip beda kalau mau triase lebih jelas.
