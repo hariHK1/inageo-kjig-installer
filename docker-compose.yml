@@ -446,6 +446,11 @@ services:
       # (repo source). Kosong = belum pernah dideteksi, pesan kegagalan
       # harvest fallback tanpa menyebut IP (bukan error).
       IP_PUBLIC: ${IP_PUBLIC:-}
+      # User-Agent yang dikirim ke server CSW SJ — OPSIONAL, kosong = pakai
+      # default kode (URL tanahair.indonesia.go.id/peta). Isi HANYA kalau
+      # instalasi ini punya domain publik SENDIRI (beda dari deployment
+      # asal) — lihat catatan lengkap di ssrf-guard.ts (repo source).
+      HARVESTER_USER_AGENT: ${HARVESTER_USER_AGENT:-}
       # Sama seperti SENTRY_DSN di service `app` — opsional, harvester tetap
       # jalan normal tanpanya. Var TERPISAH supaya error harvester & app bisa
       # dipisah jadi 2 project GlitchTip beda kalau mau triase lebih jelas.
