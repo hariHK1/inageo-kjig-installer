@@ -1153,20 +1153,42 @@ muat_ulang_nginx_kalau_perlu() {
 # persis IP mana yang perlu di-whitelist (lihat catatan lengkap di
 # .env.example & HARVESTER_PUBLIC_IP di repo source, ssrf-guard.ts).
 #
-# DARI DALAM container harvester (docker compose exec), BUKAN dari host —
-# supaya persis jalur NAT/egress yang sungguhan dipakai request harvest,
-# bukan asumsi keduanya sama (bisa beda kalau host punya multi-NIC/VPN).
+# DARI container harvester (image sama, network/NAT sama), BUKAN dari host —
+# supaya persis jalur egress yang sungguhan dipakai request harvest, bukan
+# asumsi keduanya sama (bisa beda kalau host punya multi-NIC/VPN).
+#
+# `run --rm` (BUKAN `exec`) — image harvester (node:24-alpine) TIDAK punya
+# curl terinstal (healthcheck Dockerfile-nya sendiri sengaja pakai wget,
+# bukan curl, karena itu — ditemukan nyata: perintah curl via exec gagal
+# diam-diam di produksi). Dipakai `node -e` sebagai gantinya (SELALU ada,
+# itu yang menjalankan harvester) lewat container BARU sekali-pakai —
+# sekalian menghindari ambiguitas exec kalau harvester di-scale >1 replika
+# (pola sama dgn action_harvester_migrate/seed di atas, run --rm bukan exec
+# ke replika tertentu).
 #
 # Best-effort & TIDAK PERNAH menggagalkan ganti versi: layanan "what's my
 # IP" eksternal bisa down/jaringan DC bermasalah sementara — kegagalan di
 # sini cukup diperingatkan, .env tetap memakai nilai lama (bukan ditimpa
 # kosong, supaya pesan kegagalan tidak mendadak kehilangan info yang
 # sebelumnya sudah benar).
+deteksi_ip_via_node() {
+    $COMPOSE_CMD run --rm --no-deps -T harvester node -e '
+        fetch("'"$1"'", { signal: AbortSignal.timeout(10000) })
+          .then((r) => r.text())
+          .then((t) => process.stdout.write(t.trim()))
+          .catch(() => {});
+    ' 2>/dev/null
+}
+
 perbarui_ip_publik() {
     local ip
-    ip="$($COMPOSE_CMD exec -T harvester curl -s --max-time 10 https://ifconfig.me 2>/dev/null)"
+    # "/ip" WAJIB, bukan "/" polos — ifconfig.me membalas HALAMAN HTML PENUH
+    # (bukan teks IP polos) kalau User-Agent pemanggilnya bukan "curl" persis
+    # (Node fetch/undici kena efek ini, dites nyata) — path "/ip" konsisten
+    # teks polos apa pun User-Agent-nya.
+    ip="$(deteksi_ip_via_node https://ifconfig.me/ip)"
     if [[ -z "$ip" ]]; then
-        ip="$($COMPOSE_CMD exec -T harvester curl -s --max-time 10 https://icanhazip.com 2>/dev/null | tr -d '\r\n')"
+        ip="$(deteksi_ip_via_node https://icanhazip.com)"
     fi
     if [[ -z "$ip" ]] || ! [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
         log_warn "Gagal mendeteksi IP publik keluar harvester — IP_PUBLIC di .env TIDAK diubah (tetap: ${IP_PUBLIC:-belum diset})."
