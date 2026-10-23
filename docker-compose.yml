@@ -281,9 +281,10 @@ services:
     # mapproxy(4C/2G) + redis(1C/0.75G) + postgres(4C/8G) +
     # postgres-backup(1C/0.5G) + redis-queue(1C/0.5G) + harvester(1×1C/1G) +
     # glitchtip-postgres(1C/0.5G) + glitchtip-valkey(0.5C/0.25G) +
-    # glitchtip(1C/0.5G) + uptime-kuma(0.5C/0.25G) + minio(1C/0.5G) +
-    # geoserver-db(1C/1G) + geoserver(1C/2G) ≈ 21 core / 22,375GB (minio
-    # sebelumnya tidak ikut terhitung — ditambahkan sekarang) — sesuaikan
+    # glitchtip(1C/0.5G) + uptime-kuma(0.5C/0.25G) + minio(1C/2G) +
+    # geoserver-db(1C/1G) + geoserver(1C/2G) ≈ 21 core / 23,875GB (minio
+    # dinaikkan dari 0.5G ke 2G — healthcheck/console sempat mentok 100%
+    # RAM di limit lama) — sesuaikan
     # dgn kapasitas host produksi sesungguhnya sebelum menaikkan
     # APP_REPLICAS/HARVESTER_REPLICAS jauh lebih tinggi dari default.
     deploy:
@@ -734,7 +735,7 @@ services:
       resources:
         limits:
           cpus: "1"
-          memory: 512M
+          memory: 2G
     volumes:
       - minio_data:/data
     healthcheck:
