@@ -515,8 +515,15 @@ services:
   # dedicated resource tinggi (64GB RAM/32-core/512GB) disiapkan khusus untuk
   # ini. Single-node (satu server fisik), TANPA `ports:` (internal-only, sama
   # seperti postgres/redis/mapproxy — lihat catatan network `cache` di bawah).
+  # CATATAN KEAMANAN (Okt 2026): CVE-2026-56145 (CVSSv3 6.5) — user
+  # terautentikasi berprivilese rendah bisa kirim query EQL sequence yang
+  # dibuat khusus utk memicu konsumsi memori berlebihan, meng-crash node.
+  # Rentang rentan 8.0.0-sebelum 8.19.18, kita persis di dalamnya (8.15.0).
+  # Fix resmi di 8.19.18; dinaikkan ke 8.19.19 (patch terbaru di line 8.19.x
+  # yang sama, bukan loncat ke 9.x — @elastic/elasticsearch npm client di
+  # harvester masih ^8.15.0, biar tetap satu line kompatibel).
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.19
     restart: unless-stopped
     deploy:
       resources:
@@ -690,8 +697,34 @@ services:
   # Tanpa `ports:` & hanya network "cache" (internal:true) — sama filosofi
   # isolasi postgres/redis, tidak pernah dijangkau dari luar. Konsol admin
   # (:9001) SENGAJA tidak diekspos; kelola lewat `docker compose exec`.
+  # CATATAN KEAMANAN (Okt 2026) — image & registry berubah BERSAMAAN, dua
+  # alasan independen:
+  #  1. CVE-2026-41145 & CVE-2026-40344: siapa pun yang tahu access key
+  #     (termasuk default "minioadmin") bisa tulis objek ke bucket MANA PUN
+  #     tanpa secret key. Fix per advisory upstream ada di
+  #     RELEASE.2026-04-11T03-20-12Z.
+  #  2. MinIO Inc. meng-arsipkan proyek open-source-nya (read-only sejak Apr
+  #     2026), lalu MENGHAPUS TOTAL minio/minio dari Docker Hub (11 Sep 2026).
+  #     Percobaan pertama pindah ke quay.io/minio GAGAL — registry itu JUGA
+  #     mulai menolak pull anonim sejak 24 Sep 2026 (perlu akun berbayar).
+  #
+  # pgsty/minio DIPAKAI SEBAGAI GANTI — fork komunitas oleh Pigsty (proyek
+  # tooling Postgres yang sudah dikenal, bukan mirror anonim), drop-in
+  # replacement (env var/command/format /data SAMA, konsol admin dipulihkan),
+  # sudah dipakai default oleh Grafana Loki Helm Chart. Tag
+  # RELEASE.2026-08-04T00-00-00Z TERVERIFIKASI lewat API registry Docker Hub
+  # langsung (bukan cuma hasil pencarian) 23 Okt 2026: tag ADA, bukan private,
+  # dan manifest-nya BENAR BISA diambil anonim (HTTP 200 via token registry
+  # v2 publik) — beda dari quay.io yang menolak. Tanggal rilis (Agustus 2026)
+  # sudah lewat tanggal fix CVE di atas (April 2026).
+  #
+  # TETAP bukan vendor asli MinIO Inc. — verifikasi manual sebelum deploy:
+  # `docker pull pgsty/minio:RELEASE.2026-08-04T00-00-00Z` di server, lalu
+  # jalankan sekali & pastikan healthcheck (`mc ready local`, DI DALAM image
+  # ini — perlu `mc` bawaan tetap ada) dan konsol :9001 masih berfungsi
+  # normal sebelum dipercaya penuh menggantikan vendor asli.
   minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -724,8 +757,13 @@ services:
   # berbasis KONTEN (bbox live + layer + URL service): kalau instansi mengubah
   # ISI petanya tanpa mengubah metadata/bbox, kuncinya tidak berubah dan
   # thumbnail lama akan basi selamanya tanpa jaring pengaman umur ini.
+  # pgsty/mc — fork `mc` yang sama (Pigsty), alasan SAMA persis dgn service
+  # `minio` di atas (minio/mc juga dihapus dari Docker Hub 11 Sep 2026).
+  # Tag disamakan tanggal rilisnya dgn image minio di atas, juga TERVERIFIKASI
+  # ada & bisa ditarik anonim (HTTP 200) lewat API registry Docker Hub
+  # langsung 23 Okt 2026. Verifikasi pull manual yang sama berlaku di sini.
   minio-init:
-    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    image: pgsty/mc:RELEASE.2026-08-04T00-00-00Z
     restart: on-failure
     depends_on:
       minio:
